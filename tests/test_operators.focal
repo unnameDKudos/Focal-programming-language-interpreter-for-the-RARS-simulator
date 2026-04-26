@@ -1,0 +1,10 @@
+1: SET A=10
+2: SET B=5
+3: TYPE "A = ",A,!
+4: TYPE "B = ",B,!
+5: TYPE "A + B = ",A+B,!
+6: TYPE "A - B = ",A-B,!
+7: TYPE "A * B = ",A*B,!
+8: TYPE "A / B = ",A/B,!
+9: TYPE "A ^ 2 = ",A^2,!
+10: QUIT

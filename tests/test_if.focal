@@ -1,0 +1,6 @@
+1: SET A=10
+2: SET B=5
+3: IF A>B DO TYPE "A is greater",!
+4: IF A<B DO TYPE "A is less",!
+5: IF A=B DO TYPE "A equals B",!
+6: QUIT

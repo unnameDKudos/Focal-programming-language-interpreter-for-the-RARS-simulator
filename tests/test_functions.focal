@@ -1,0 +1,8 @@
+1: SET X=16
+2: SET Y=FSQT(X)
+3: TYPE "Square root of ",X," = ",Y,!
+4: SET Z=FSIN(0)
+5: TYPE "Sin(0) = ",Z,!
+6: SET W=FCOS(0)
+7: TYPE "Cos(0) = ",W,!
+8: QUIT

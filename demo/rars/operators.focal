@@ -1,0 +1,5 @@
+1: SET A=2+3*4
+2: SET B=(2+3)*4
+3: TYPE "A = ",A,!
+4: TYPE "B = ",B,!
+5: QUIT

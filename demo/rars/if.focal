@@ -1,0 +1,6 @@
+1: SET A=10
+2: IF A>5 DO TYPE "A is greater",!
+3: IF A<5 THEN 5
+4: QUIT
+5: TYPE "bad",!
+6: QUIT

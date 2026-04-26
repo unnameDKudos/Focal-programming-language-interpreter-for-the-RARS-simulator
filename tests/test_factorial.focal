@@ -1,0 +1,5 @@
+1: ASK N, "Enter number: "
+2: SET F=1
+3: FOR I=1,N DO SET F=F*I
+4: TYPE "Factorial = ",F,!
+5: QUIT

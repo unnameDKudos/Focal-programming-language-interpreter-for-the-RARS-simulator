@@ -1,0 +1,5 @@
+1: SET I=1
+2: TYPE I,!
+3: SET I=I+1
+4: IF I<=5 GOTO 2
+5: QUIT

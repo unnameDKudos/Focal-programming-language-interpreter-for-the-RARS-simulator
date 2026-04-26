@@ -1,0 +1,5 @@
+1: TYPE "one",!
+2: GOTO 4
+3: TYPE "bad",!
+4: TYPE "two",!
+5: QUIT

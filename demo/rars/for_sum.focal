@@ -1,0 +1,4 @@
+1: SET S=0
+2: FOR I=1,5 DO SET S=S+I
+3: TYPE "Sum = ",S,!
+4: QUIT
