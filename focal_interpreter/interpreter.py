@@ -21,13 +21,16 @@ class Interpreter:
         self.should_quit = False
         self.output_buffer = []
 
-    def interpret(self, program: List[ProgramLine]):
+    def interpret(self, program: List[ProgramLine], start_line: Optional[int] = None):
         for line in program:
             self.program_lines[line.line_number] = line
 
         sorted_lines = sorted(self.program_lines.keys())
 
-        self.current_line = sorted_lines[0] if sorted_lines else None
+        if start_line is not None and start_line in self.program_lines:
+            self.current_line = start_line
+        else:
+            self.current_line = sorted_lines[0] if sorted_lines else None
 
         while self.current_line is not None and not self.should_quit:
             if self.current_line in self.program_lines:

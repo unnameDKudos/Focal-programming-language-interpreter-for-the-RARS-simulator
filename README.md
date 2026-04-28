@@ -26,7 +26,20 @@ python -m focal_interpreter.main
 python run_tests.py
 ```
 
-**RARS** — открыть `rars_focal_interpreter.asm`, `Assemble`, `Run`, смотреть вывод в Run I/O.
+**RARS** — открыть `rars_focal_interpreter.asm`, `Assemble`, `Run`. По умолчанию
+стартует REPL:
+
+```text
+> 10 SET A=2+3*4
+> 20 TYPE "A = ",A,!
+> 30 QUIT
+> RUN
+A = 14.0
+```
+
+Строки в RARS REPL можно вводить в любом порядке; повторный ввод номера заменяет
+строку, пустая строка с номером удаляет ее. `LIST` и `RUN` работают по
+возрастанию номеров.
 
 Собрать отдельный asm с встроенной программой из `demo/rars/`:
 
@@ -35,3 +48,11 @@ python tools/embed_rars_demo.py demo/rars/hello.focal -o demo/rars/hello.asm
 ```
 
 Полная схема запуска, демо и деталей — в сопутствующей документации к проекту.
+
+Основные документы:
+
+- `RARS_QUICK_CHECK.md` — короткая инструкция для ручной проверки в RARS.
+- `FOCAL_USER_GUIDE.md` — синтаксис FOCAL, Python REPL, RARS REPL.
+- `RARS_TESTING.md` — ручная и автоматическая проверка в RARS.
+- `VM_ARCHITECTURE.md` — устройство байткода, VM и памяти.
+- `CODE_GENERATION.md` — роль вспомогательного Python-генератора asm.

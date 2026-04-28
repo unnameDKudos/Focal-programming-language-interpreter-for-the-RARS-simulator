@@ -28,6 +28,11 @@ def main():
         default="rars_demo.asm",
         help="Output asm file",
     )
+    parser.add_argument(
+        "--repl",
+        action="store_true",
+        help="Keep RARS REPL enabled in the generated asm",
+    )
     args = parser.parse_args()
 
     template = Path(args.template)
@@ -46,6 +51,12 @@ def main():
             break
     else:
         raise SystemExit("Cannot find focal_program .asciz in template")
+
+    if not args.repl:
+        lines = [
+            "repl_enabled:   .word 0" if line.startswith("repl_enabled:") else line
+            for line in lines
+        ]
 
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"[OK] Created {output} from {focal}")

@@ -25,11 +25,11 @@ def run_file(filename: str):
         print(f"Error: {e}")
 
 
-def run(source_code: str):
+def run(source_code: str, start_line=None):
     try:
         program = parse_source(source_code)
         interpreter = Interpreter()
-        interpreter.interpret(program)
+        interpreter.interpret(program, start_line=start_line)
 
     except Exception as e:
         print(f"Error: {e}")
@@ -40,10 +40,24 @@ def run(source_code: str):
 
 def repl():
     print("FOCAL Interpreter")
-    print("Commands: RUN/GO, LIST, ERASE, QUIT")
+    print("Commands: RUN/GO [line], LIST, ERASE, HELP, QUIT")
     print()
 
     stored_lines = {}
+
+    def build_source():
+        return "\n".join(
+            f"{line_no}: {stored_lines[line_no]}"
+            for line_no in sorted(stored_lines)
+        )
+
+    def print_help():
+        print("Enter numbered lines, then RUN:")
+        print('  10 SET A=2+3*4')
+        print('  20 TYPE "A = ",A,!')
+        print("  30 QUIT")
+        print("  RUN")
+        print("Commands: RUN/GO [line], LIST, ERASE, HELP, QUIT")
 
     while True:
         try:
@@ -57,13 +71,18 @@ def repl():
             if command == "QUIT":
                 break
 
-            if command in ("RUN", "GO"):
-                source = "\n".join(
-                    f"{line_no}: {stored_lines[line_no]}"
-                    for line_no in sorted(stored_lines)
-                )
+            if command == "HELP":
+                print_help()
+                continue
+
+            run_match = re.match(r"^(RUN|GO)(?:\s+(\d+))?$", command)
+            if run_match:
+                source = build_source()
                 if source:
-                    run(source)
+                    start_line = int(run_match.group(2)) if run_match.group(2) else None
+                    run(source, start_line=start_line)
+                else:
+                    print("No program. Enter numbered lines first.")
                 continue
 
             if command == "LIST":
