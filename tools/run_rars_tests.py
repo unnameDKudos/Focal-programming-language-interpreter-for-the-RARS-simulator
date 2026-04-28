@@ -1,7 +1,7 @@
 import os
+import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from embed_rars_demo import asm_string
@@ -19,11 +19,16 @@ def build_demo_asm(focal_path: Path, output_path: Path):
         source += "\n"
 
     lines = asm.splitlines()
+    found = False
     for idx, line in enumerate(lines):
+        if line.strip().startswith("repl_enabled:"):
+            lines[idx] = "repl_enabled:   .word 0"
         if line.strip().startswith(".asciz ") and idx > 0 and lines[idx - 1].strip() == "focal_program:":
             lines[idx] = asm_string(source)
-            output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return
+            found = True
+    if found:
+        output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
 
     raise RuntimeError("Cannot find focal_program .asciz in template")
 
@@ -49,8 +54,11 @@ def main():
     passed = 0
     failed = 0
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
+    tmp_dir = ROOT / ".rars_test_build"
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir()
+    try:
         for focal in focal_files:
             expected_path = focal.with_suffix(".expected.txt")
             expected = expected_path.read_text(encoding="utf-8").strip()
@@ -68,6 +76,8 @@ def main():
                 print(f"Actual stdout:\n{stdout}")
                 print(f"Actual stderr:\n{stderr}")
                 failed += 1
+    finally:
+        shutil.rmtree(tmp_dir)
 
     print(f"Passed: {passed}")
     print(f"Failed: {failed}")

@@ -6,7 +6,7 @@
 Интерпретатор стартует в REPL:
 
 ```text
-FOCAL/RARS REPL. Enter numbered lines, RUN, ERASE, QUIT.
+FOCAL/RARS REPL. Enter numbered lines, LOAD, SAVE, RUN, ERASE, QUIT.
 > 10 SET A=2+3*4
 > 20 TYPE "A = ",A,!
 > 30 QUIT
@@ -16,8 +16,11 @@ A = 14.0
 
 Команды REPL:
 
+- FOCAL-команда без номера — немедленное выполнение команды;
 - `RUN` или `GO` — компиляция введенных строк в байткод и запуск VM;
 - `LIST` — вывод текущего буфера программы;
+- `LOAD <file>` — загрузка FOCAL-программы из файла в буфер;
+- `SAVE <file>` — сохранение текущего буфера программы в файл;
 - `ERASE` — очистка буфера;
 - `QUIT` — выход.
 
@@ -35,6 +38,44 @@ A = 14.0
 > RUN
 5.0
 ```
+
+Проверка немедленного вычисления в REPL:
+
+```text
+> TYPE 2+3*4,!
+> SET A=5
+> TYPE A*2,!
+```
+
+Ожидается:
+
+```text
+14.0
+10.0
+```
+
+Проверка файловых команд:
+
+```text
+> ERASE
+> 10 TYPE "file ok",!
+> 20 QUIT
+> SAVE C:\Users\Admin\Desktop\Focal simulator\saved.focal
+> ERASE
+> LOAD C:\Users\Admin\Desktop\Focal simulator\saved.focal
+> LIST
+> RUN
+```
+
+Ожидается, что `SAVE` напечатает `Saved`, `LOAD` напечатает `Loaded`, `LIST`
+выведет две сохраненные строки, а `RUN` напечатает:
+
+```text
+file ok
+```
+
+В RARS GUI рекомендуется указывать полный путь. Относительный путь считается от
+рабочей папки процесса Java/RARS, а не обязательно от папки проекта.
 
 ## Демо-программы
 
@@ -64,4 +105,5 @@ python tools/run_rars_tests.py
 - числовые литералы в RARS-исходнике пока целые;
 - значения внутри VM, `ASK` и `TYPE` чисел используют float;
 - `FOR` поддерживает только шаг `+1`;
+- `LOAD` читает файл целиком в буфер до 8191 символа;
 - RARS REPL ограничен 128 строками по 127 символов.

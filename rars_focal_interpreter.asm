@@ -1,4 +1,4 @@
-﻿.eqv OP_NOP        0
+.eqv OP_NOP        0
 .eqv OP_PUSH_F     1
 .eqv OP_PUSH_V     2
 .eqv OP_STORE_V    3
@@ -53,13 +53,17 @@ str_pool:       .space 4096
 program_buf:    .space 8192
 program_buf_ptr:.word 0
 input_line:     .space 256
+file_name:      .space 256
 zero_f:         .float 0.0
 one_f:          .float 1.0
 err_unknown:    .asciz "FOCAL/RARS error: unknown statement\n"
 err_line:       .asciz "FOCAL/RARS error: line not found\n"
-repl_banner:    .asciz "FOCAL/RARS REPL. Enter numbered lines, RUN, ERASE, QUIT.\n"
+repl_banner:    .asciz "FOCAL/RARS REPL. Enter numbered lines, LOAD, SAVE, RUN, ERASE, QUIT.\n"
 repl_prompt:    .asciz "> "
 repl_empty:     .asciz "No program\n"
+repl_load_ok:   .asciz "Loaded\n"
+repl_save_ok:   .asciz "Saved\n"
+repl_file_err:  .asciz "File error\n"
 .text
 .globl main
 main:
@@ -106,10 +110,26 @@ repl_loop:
     call repl_is_erase
     bnez a0, repl_erase
     la a0, input_line
+    call repl_is_load
+    bnez a0, repl_load
+    la a0, input_line
+    call repl_is_save
+    bnez a0, repl_save
+    la a0, input_line
     call repl_is_quit
     bnez a0, program_exit
     la a0, input_line
+    call skip_spaces_a0
+    lbu t0, 0(a0)
+    li t1, 48
+    blt t0, t1, repl_immediate
+    li t1, 57
+    bgt t0, t1, repl_immediate
+    la a0, input_line
     call repl_store_line
+    j repl_loop
+repl_immediate:
+    call repl_run_immediate
     j repl_loop
 repl_run:
     call repl_build_program
@@ -139,6 +159,12 @@ repl_list:
     j repl_loop
 repl_erase:
     call repl_clear_program
+    j repl_loop
+repl_load:
+    call repl_load_file
+    j repl_loop
+repl_save:
+    call repl_save_file
     j repl_loop
 repl_clear_program:
     la t0, program_buf
@@ -170,6 +196,47 @@ reset_runtime:
     sw t0, 0(t1)
     la t0, line_count
     sw zero, 0(t0)
+    ret
+repl_run_immediate:
+    addi sp, sp, -32
+    sw ra, 0(sp)
+    sw s4, 4(sp)
+    la s4, program_buf
+    li a0, 48
+    call repl_append_char_to_program
+    li a0, 58
+    call repl_append_char_to_program
+    li a0, 32
+    call repl_append_char_to_program
+    la a0, input_line
+    call skip_spaces_a0
+rri_copy:
+    lbu t0, 0(a0)
+    beqz t0, rri_copy_done
+    li t1, 10
+    beq t0, t1, rri_copy_done
+    li t1, 13
+    beq t0, t1, rri_copy_done
+    sb t0, 0(s4)
+    addi s4, s4, 1
+    addi a0, a0, 1
+    j rri_copy
+rri_copy_done:
+    li a0, 10
+    call repl_append_char_to_program
+    sb zero, 0(s4)
+    call reset_runtime
+    la t0, program_buf
+    la t1, source_ptr
+    sw t0, 0(t1)
+    call compile_program
+    la t0, bytecode_buf
+    la t1, pc_ptr
+    sw t0, 0(t1)
+    call vm_run
+    lw ra, 0(sp)
+    lw s4, 4(sp)
+    addi sp, sp, 32
     ret
 repl_store_line:
     addi sp, sp, -32
@@ -449,6 +516,56 @@ rie_no:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
+repl_is_load:
+    addi sp, sp, -16
+    sw ra, 0(sp)
+    call skip_spaces_a0
+    lbu t0, 0(a0)
+    li t1, 76
+    bne t0, t1, rild_no
+    lbu t0, 1(a0)
+    li t1, 79
+    bne t0, t1, rild_no
+    lbu t0, 2(a0)
+    li t1, 65
+    bne t0, t1, rild_no
+    lbu t0, 3(a0)
+    li t1, 68
+    bne t0, t1, rild_no
+    li a0, 1
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+rild_no:
+    li a0, 0
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+repl_is_save:
+    addi sp, sp, -16
+    sw ra, 0(sp)
+    call skip_spaces_a0
+    lbu t0, 0(a0)
+    li t1, 83
+    bne t0, t1, risv_no
+    lbu t0, 1(a0)
+    li t1, 65
+    bne t0, t1, risv_no
+    lbu t0, 2(a0)
+    li t1, 86
+    bne t0, t1, risv_no
+    lbu t0, 3(a0)
+    li t1, 69
+    bne t0, t1, risv_no
+    li a0, 1
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+risv_no:
+    li a0, 0
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
 repl_is_quit:
     addi sp, sp, -16
     sw ra, 0(sp)
@@ -467,6 +584,184 @@ riq_no:
     li a0, 0
     lw ra, 0(sp)
     addi sp, sp, 16
+    ret
+repl_extract_file_name:
+    addi sp, sp, -16
+    sw ra, 0(sp)
+    call skip_spaces_a0
+    addi a0, a0, 4
+    call skip_spaces_a0
+    la t0, file_name
+    li t1, 255
+refn_loop:
+    beqz t1, refn_done
+    lbu t2, 0(a0)
+    beqz t2, refn_done
+    li t3, 10
+    beq t2, t3, refn_done
+    li t3, 13
+    beq t2, t3, refn_done
+    sb t2, 0(t0)
+    addi t0, t0, 1
+    addi a0, a0, 1
+    addi t1, t1, -1
+    j refn_loop
+refn_done:
+    sb zero, 0(t0)
+    la a0, file_name
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+repl_load_file:
+    addi sp, sp, -32
+    sw ra, 0(sp)
+    la a0, input_line
+    call repl_extract_file_name
+    lbu t0, 0(a0)
+    beqz t0, rlf_err
+    call repl_clear_program
+    li a1, 0
+    li a7, 1024
+    ecall
+    bltz a0, rlf_err
+    sw a0, 4(sp)
+    la a0, program_buf
+    li a1, 8191
+    lw a2, 4(sp)
+    mv t0, a0
+    mv a0, a2
+    mv a2, a1
+    mv a1, t0
+    li a7, 63
+    ecall
+    bltz a0, rlf_close_err
+    mv t0, a0
+    la t1, program_buf
+    add t1, t1, t0
+    sb zero, 0(t1)
+    lw a0, 4(sp)
+    li a7, 57
+    ecall
+    la a0, program_buf
+    call repl_import_program_buf
+    la a0, repl_load_ok
+    li a7, 4
+    ecall
+    j rlf_done
+rlf_close_err:
+    lw a0, 4(sp)
+    li a7, 57
+    ecall
+rlf_err:
+    la a0, repl_file_err
+    li a7, 4
+    ecall
+rlf_done:
+    lw ra, 0(sp)
+    addi sp, sp, 32
+    ret
+repl_save_file:
+    addi sp, sp, -32
+    sw ra, 0(sp)
+    la a0, input_line
+    call repl_extract_file_name
+    lbu t0, 0(a0)
+    beqz t0, rsf_err
+    call repl_build_program
+    la a0, program_buf
+    call string_length
+    sw a0, 8(sp)
+    la a0, file_name
+    li a1, 1
+    li a7, 1024
+    ecall
+    bltz a0, rsf_err
+    sw a0, 4(sp)
+    mv a0, a0
+    la a1, program_buf
+    lw a2, 8(sp)
+    li a7, 64
+    ecall
+    bltz a0, rsf_close_err
+    lw a0, 4(sp)
+    li a7, 57
+    ecall
+    la a0, repl_save_ok
+    li a7, 4
+    ecall
+    j rsf_done
+rsf_close_err:
+    lw a0, 4(sp)
+    li a7, 57
+    ecall
+rsf_err:
+    la a0, repl_file_err
+    li a7, 4
+    ecall
+rsf_done:
+    lw ra, 0(sp)
+    addi sp, sp, 32
+    ret
+repl_import_program_buf:
+    addi sp, sp, -32
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    mv s0, a0
+rip_outer:
+    lbu t0, 0(s0)
+    beqz t0, rip_done
+    li t1, 10
+    beq t0, t1, rip_skip_nl
+    li t1, 13
+    beq t0, t1, rip_skip_nl
+    la s1, input_line
+    li t2, 255
+rip_copy:
+    beqz t2, rip_copy_done
+    lbu t0, 0(s0)
+    beqz t0, rip_copy_done
+    li t1, 10
+    beq t0, t1, rip_copy_done
+    li t1, 13
+    beq t0, t1, rip_copy_done
+    sb t0, 0(s1)
+    addi s1, s1, 1
+    addi s0, s0, 1
+    addi t2, t2, -1
+    j rip_copy
+rip_copy_done:
+    sb zero, 0(s1)
+    la a0, input_line
+    call repl_store_line
+rip_to_next:
+    lbu t0, 0(s0)
+    beqz t0, rip_outer
+    li t1, 10
+    beq t0, t1, rip_skip_nl
+    li t1, 13
+    beq t0, t1, rip_skip_nl
+    addi s0, s0, 1
+    j rip_to_next
+rip_skip_nl:
+    addi s0, s0, 1
+    j rip_outer
+rip_done:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    addi sp, sp, 32
+    ret
+string_length:
+    mv t0, a0
+    li a0, 0
+sl_loop:
+    lbu t1, 0(t0)
+    beqz t1, sl_done
+    addi a0, a0, 1
+    addi t0, t0, 1
+    j sl_loop
+sl_done:
     ret
 program_exit:
     li a7, 10
