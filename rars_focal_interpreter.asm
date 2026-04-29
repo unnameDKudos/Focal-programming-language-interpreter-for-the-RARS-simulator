@@ -58,12 +58,13 @@ zero_f:         .float 0.0
 one_f:          .float 1.0
 err_unknown:    .asciz "FOCAL/RARS error: unknown statement\n"
 err_line:       .asciz "FOCAL/RARS error: line not found\n"
-repl_banner:    .asciz "FOCAL/RARS REPL. Enter numbered lines, LOAD, SAVE, RUN, ERASE, QUIT.\n"
+repl_banner:    .asciz "FOCAL/RARS REPL. Enter HELP for commands.\n"
 repl_prompt:    .asciz "> "
 repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
+repl_help_text: .asciz "Commands:\n  numbered line     add or replace program line\n  number only       delete program line\n  FOCAL command     execute immediately\n  RUN or GO         run stored program\n  LIST              show stored program\n  LOAD <file>       load program from file\n  SAVE <file>       save program to file\n  ERASE             clear stored program\n  HELP              show this help\n  QUIT              exit interpreter\nUse full file paths in RARS GUI for LOAD/SAVE.\n"
 .text
 .globl main
 main:
@@ -96,6 +97,8 @@ repl_loop:
     li a7, 8
     ecall
     la a0, input_line
+    call normalize_repl_keyword
+    la a0, input_line
     call skip_spaces_a0
     lbu t0, 0(a0)
     beqz t0, repl_loop
@@ -115,6 +118,9 @@ repl_loop:
     la a0, input_line
     call repl_is_save
     bnez a0, repl_save
+    la a0, input_line
+    call repl_is_help
+    bnez a0, repl_help
     la a0, input_line
     call repl_is_quit
     bnez a0, program_exit
@@ -152,7 +158,7 @@ repl_no_program:
     ecall
     j repl_loop
 repl_list:
-    call repl_build_program
+    call repl_build_listing
     la a0, program_buf
     li a7, 4
     ecall
@@ -165,6 +171,11 @@ repl_load:
     j repl_loop
 repl_save:
     call repl_save_file
+    j repl_loop
+repl_help:
+    la a0, repl_help_text
+    li a7, 4
+    ecall
     j repl_loop
 repl_clear_program:
     la t0, program_buf
@@ -183,6 +194,57 @@ rcp_loop:
     addi t1, t1, 1
     j rcp_loop
 rcp_done:
+    ret
+normalize_repl_keyword:
+    mv t0, a0
+nrk_skip_spaces:
+    lbu t1, 0(t0)
+    li t2, 32
+    beq t1, t2, nrk_space_next
+    li t2, 9
+    beq t1, t2, nrk_space_next
+    j nrk_check_number
+nrk_space_next:
+    addi t0, t0, 1
+    j nrk_skip_spaces
+nrk_check_number:
+    li t2, 48
+    blt t1, t2, nrk_upper
+    li t2, 57
+    bgt t1, t2, nrk_upper
+nrk_digits:
+    lbu t1, 0(t0)
+    li t2, 48
+    blt t1, t2, nrk_after_digits
+    li t2, 57
+    bgt t1, t2, nrk_after_digits
+    addi t0, t0, 1
+    j nrk_digits
+nrk_after_digits:
+    li t2, 58
+    bne t1, t2, nrk_skip_after_number
+    addi t0, t0, 1
+nrk_skip_after_number:
+    lbu t1, 0(t0)
+    li t2, 32
+    beq t1, t2, nrk_after_space_next
+    li t2, 9
+    beq t1, t2, nrk_after_space_next
+    j nrk_upper
+nrk_after_space_next:
+    addi t0, t0, 1
+    j nrk_skip_after_number
+nrk_upper:
+    lbu t1, 0(t0)
+    li t2, 97
+    blt t1, t2, nrk_done
+    li t2, 122
+    bgt t1, t2, nrk_done
+    addi t1, t1, -32
+    sb t1, 0(t0)
+    addi t0, t0, 1
+    j nrk_upper
+nrk_done:
     ret
 reset_runtime:
     la t0, bytecode_buf
@@ -399,6 +461,62 @@ rbp_done:
     lw s4, 20(sp)
     addi sp, sp, 48
     ret
+repl_build_listing:
+    addi sp, sp, -48
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    la s4, program_buf
+    li s0, 0
+rbl_outer:
+    li s1, 0
+    li s2, 100000
+    la t0, repl_line_count
+    lw s3, 0(t0)
+    li t1, 0
+rbl_find:
+    bge t1, s3, rbl_emit
+    slli t2, t1, 2
+    la t3, repl_numbers
+    add t3, t3, t2
+    lw t4, 0(t3)
+    beqz t4, rbl_next
+    ble t4, s0, rbl_next
+    bge t4, s2, rbl_next
+    mv s2, t4
+    mv s1, t1
+rbl_next:
+    addi t1, t1, 1
+    j rbl_find
+rbl_emit:
+    li t0, 100000
+    beq s2, t0, rbl_done
+    mv a0, s2
+    call repl_append_int_to_program
+    li a0, 32
+    call repl_append_char_to_program
+    mv a0, s1
+    call repl_text_addr
+    call repl_append_string_to_program
+    li a0, 10
+    call repl_append_char_to_program
+    mv s0, s2
+    j rbl_outer
+rbl_done:
+    sb zero, 0(s4)
+    la t0, program_buf_ptr
+    sw s4, 0(t0)
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    addi sp, sp, 48
+    ret
 repl_append_char_to_program:
     sb a0, 0(s4)
     addi s4, s4, 1
@@ -562,6 +680,31 @@ repl_is_save:
     addi sp, sp, 16
     ret
 risv_no:
+    li a0, 0
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+repl_is_help:
+    addi sp, sp, -16
+    sw ra, 0(sp)
+    call skip_spaces_a0
+    lbu t0, 0(a0)
+    li t1, 72
+    bne t0, t1, rih_no
+    lbu t0, 1(a0)
+    li t1, 69
+    bne t0, t1, rih_no
+    lbu t0, 2(a0)
+    li t1, 76
+    bne t0, t1, rih_no
+    lbu t0, 3(a0)
+    li t1, 80
+    bne t0, t1, rih_no
+    li a0, 1
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+rih_no:
     li a0, 0
     lw ra, 0(sp)
     addi sp, sp, 16
@@ -834,17 +977,31 @@ compile_statement:
     lbu t2, 0(t1)
     li t3, 83
     beq t2, t3, cs_set
+    li t3, 115
+    beq t2, t3, cs_set
     li t3, 84
+    beq t2, t3, cs_type
+    li t3, 116
     beq t2, t3, cs_type
     li t3, 65
     beq t2, t3, cs_ask
+    li t3, 97
+    beq t2, t3, cs_ask
     li t3, 73
+    beq t2, t3, cs_if
+    li t3, 105
     beq t2, t3, cs_if
     li t3, 70
     beq t2, t3, cs_for
+    li t3, 102
+    beq t2, t3, cs_for
     li t3, 71
     beq t2, t3, cs_goto
+    li t3, 103
+    beq t2, t3, cs_goto
     li t3, 81
+    beq t2, t3, cs_quit
+    li t3, 113
     beq t2, t3, cs_quit
     la a0, err_unknown
     li a7, 4
@@ -992,9 +1149,15 @@ compile_if:
     lbu t2, 0(t1)
     li t3, 84
     beq t2, t3, cif_then
+    li t3, 116
+    beq t2, t3, cif_then
     li t3, 71
     beq t2, t3, cif_goto
+    li t3, 103
+    beq t2, t3, cif_goto
     li t3, 68
+    beq t2, t3, cif_do
+    li t3, 100
     beq t2, t3, cif_do
     j cif_done
 cif_then:
@@ -1321,7 +1484,15 @@ parse_variable_ref:
     la t0, parse_ptr
     lw t1, 0(t0)
     lbu t2, 0(t1)
+    li t3, 97
+    blt t2, t3, pvr_upper
+    li t3, 122
+    bgt t2, t3, pvr_upper
+    addi t2, t2, -97
+    j pvr_index_ready
+pvr_upper:
     addi t2, t2, -65
+pvr_index_ready:
     sw t2, 4(sp)
     addi t1, t1, 1
     sw t1, 0(t0)

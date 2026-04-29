@@ -6,7 +6,7 @@
 Интерпретатор стартует в REPL:
 
 ```text
-FOCAL/RARS REPL. Enter numbered lines, LOAD, SAVE, RUN, ERASE, QUIT.
+FOCAL/RARS REPL. Enter HELP for commands.
 > 10 SET A=2+3*4
 > 20 TYPE "A = ",A,!
 > 30 QUIT
@@ -22,7 +22,11 @@ A = 14.0
 - `LOAD <file>` — загрузка FOCAL-программы из файла в буфер;
 - `SAVE <file>` — сохранение текущего буфера программы в файл;
 - `ERASE` — очистка буфера;
+- `HELP` — вывод справки по командам REPL;
 - `QUIT` — выход.
+
+Команды REPL можно вводить в любом регистре. Например, `help`, `load`, `save`
+и `run` эквивалентны `HELP`, `LOAD`, `SAVE` и `RUN`.
 
 Строки можно вводить в любом порядке. Повторный ввод номера заменяет строку,
 строка без текста удаляет номер:
@@ -32,9 +36,9 @@ A = 14.0
 > 10 SET A=5
 > 20 TYPE A,!
 > LIST
-10: SET A=5
-20: TYPE A,!
-30: QUIT
+10 SET A=5
+20 TYPE A,!
+30 QUIT
 > RUN
 5.0
 ```

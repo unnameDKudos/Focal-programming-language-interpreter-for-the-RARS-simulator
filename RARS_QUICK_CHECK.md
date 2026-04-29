@@ -19,7 +19,7 @@ rars_focal_interpreter.asm
 После запуска должен появиться интерактивный режим:
 
 ```text
-FOCAL/RARS REPL. Enter numbered lines, LOAD, SAVE, RUN, ERASE, QUIT.
+FOCAL/RARS REPL. Enter HELP for commands.
 >
 ```
 
@@ -38,9 +38,9 @@ RUN
 После `LIST` ожидается:
 
 ```text
-10: SET A=2+3*4
-20: TYPE "A = ",A,!
-30: QUIT
+10 SET A=2+3*4
+20 TYPE "A = ",A,!
+30 QUIT
 ```
 
 После `RUN` ожидается:
@@ -61,7 +61,10 @@ A = 14.0
 | `SAVE <file>` | сохраняет текущий буфер REPL в файл |
 | `RUN` или `GO` | компилирует введенную программу в байткод и запускает VM |
 | `ERASE` | очищает программу |
+| `HELP` | показывает справку по командам REPL |
 | `QUIT` | завершает интерпретатор |
+
+Команды REPL можно вводить в любом регистре: `help`, `load`, `save`, `run`.
 
 Строки можно вводить не по порядку: `LIST` и `RUN` используют порядок
 возрастания номеров.
@@ -98,9 +101,9 @@ RUN
 Ожидается:
 
 ```text
-10: SET A=1
-20: TYPE "new",!
-30: QUIT
+10 SET A=1
+20 TYPE "new",!
+30 QUIT
 new
 ```
 
@@ -207,8 +210,8 @@ RUN
 ```text
 Saved
 Loaded
-10: TYPE "from file",!
-20: QUIT
+10 TYPE "from file",!
+20 QUIT
 from file
 ```
 

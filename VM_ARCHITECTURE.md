@@ -61,6 +61,7 @@ RARS REPL читает строки через `ReadString`.
 - `SAVE <file>` — сборка текущего буфера в `program_buf` и запись файла через
   файловые ecall RARS;
 - `ERASE` — очистка буфера;
+- `HELP` — вывод справки по командам REPL;
 - `QUIT` — выход.
 
 Перед `LIST` и `RUN` строки из `repl_numbers`/`repl_texts` собираются в
