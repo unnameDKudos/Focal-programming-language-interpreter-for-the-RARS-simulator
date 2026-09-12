@@ -56,6 +56,26 @@ safety_near_6:
     j error_bc_access
 safety_near_7:
 .end_macro
+.eqv ERR_DEFERRED 13
+.eqv TK_SET 1
+.eqv TK_TYPE 2
+.eqv TK_ASK 3
+.eqv TK_GOTO 4
+.eqv TK_IF 5
+.eqv TK_FOR 6
+.eqv TK_DO 7
+.eqv TK_RETURN 8
+.eqv TK_QUIT 9
+.eqv TK_COMMENT 10
+.eqv TK_WRITE 11
+.eqv TK_THEN 12
+.eqv TK_RUN 101
+.eqv TK_LIST 102
+.eqv TK_LOAD 103
+.eqv TK_SAVE 104
+.eqv TK_ERASE 105
+.eqv TK_HELP 106
+.eqv TK_EXIT 107
 .eqv OP_NOP        0
 .eqv OP_PUSH_F     1
 .eqv OP_PUSH_V     2
@@ -147,7 +167,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  numbered line     add or replace program line\n  number only       delete program line\n  FOCAL command     execute immediately\n  RUN or GO         run stored program\n  LIST              show stored program\n  LOAD <file>       load program from file\n  SAVE <file>       save program to file\n  ERASE             clear stored program\n  HELP              show this help\n  QUIT              exit interpreter\nUse full file paths in RARS GUI for LOAD/SAVE.\n"
+repl_help_text: .asciz "Commands:\n  numbered line     add/replace a stored line; number only deletes\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R WRITE/W: recognized; not implemented yet.\nExpressions, integer line numbers and IF/FOR syntax remain legacy.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -160,6 +180,73 @@ msg_array: .asciz "FOCAL/RARS error [E09]: variable/array bounds\n"
 msg_syntax: .asciz "FOCAL/RARS error [E10]: invalid source\n"
 msg_proc_stack: .asciz "FOCAL/RARS error [E11]: procedural stack limit\n"
 msg_file: .asciz "FOCAL/RARS error [E12]: file I/O\n"
+# Immutable keyword table; input bytes are compared, never normalized in place.
+    .align 2
+keyword_table:
+    .word kw_SET, TK_SET
+    .word kw_S, TK_SET
+    .word kw_TYPE, TK_TYPE
+    .word kw_T, TK_TYPE
+    .word kw_ASK, TK_ASK
+    .word kw_A, TK_ASK
+    .word kw_GOTO, TK_GOTO
+    .word kw_G, TK_GOTO
+    .word kw_GO, TK_GOTO
+    .word kw_IF, TK_IF
+    .word kw_I, TK_IF
+    .word kw_FOR, TK_FOR
+    .word kw_F, TK_FOR
+    .word kw_DO, TK_DO
+    .word kw_D, TK_DO
+    .word kw_RETURN, TK_RETURN
+    .word kw_R, TK_RETURN
+    .word kw_QUIT, TK_QUIT
+    .word kw_Q, TK_QUIT
+    .word kw_COMMENT, TK_COMMENT
+    .word kw_C, TK_COMMENT
+    .word kw_WRITE, TK_WRITE
+    .word kw_W, TK_WRITE
+    .word kw_THEN, TK_THEN
+    .word kw_RUN, TK_RUN
+    .word kw_LIST, TK_LIST
+    .word kw_LOAD, TK_LOAD
+    .word kw_SAVE, TK_SAVE
+    .word kw_ERASE, TK_ERASE
+    .word kw_HELP, TK_HELP
+    .word kw_EXIT, TK_EXIT
+    .word 0, 0
+kw_SET: .asciz "SET"
+kw_S: .asciz "S"
+kw_TYPE: .asciz "TYPE"
+kw_T: .asciz "T"
+kw_ASK: .asciz "ASK"
+kw_A: .asciz "A"
+kw_GOTO: .asciz "GOTO"
+kw_G: .asciz "G"
+kw_GO: .asciz "GO"
+kw_IF: .asciz "IF"
+kw_I: .asciz "I"
+kw_FOR: .asciz "FOR"
+kw_F: .asciz "F"
+kw_DO: .asciz "DO"
+kw_D: .asciz "D"
+kw_RETURN: .asciz "RETURN"
+kw_R: .asciz "R"
+kw_QUIT: .asciz "QUIT"
+kw_Q: .asciz "Q"
+kw_COMMENT: .asciz "COMMENT"
+kw_C: .asciz "C"
+kw_WRITE: .asciz "WRITE"
+kw_W: .asciz "W"
+kw_THEN: .asciz "THEN"
+kw_RUN: .asciz "RUN"
+kw_LIST: .asciz "LIST"
+kw_LOAD: .asciz "LOAD"
+kw_SAVE: .asciz "SAVE"
+kw_ERASE: .asciz "ERASE"
+kw_HELP: .asciz "HELP"
+kw_EXIT: .asciz "EXIT"
+msg_deferred: .asciz "FOCAL/RARS error [E13]: recognized statement not implemented yet\n"
 .text
 .globl main
 main:
@@ -202,55 +289,53 @@ repl_loop:
     call validate_input
     CHECK_ERROR (repl_loop)
     la a0, input_line
-    call normalize_repl_keyword
-    CHECK_ERROR (repl_loop)
-    la a0, input_line
     call skip_spaces_a0
     CHECK_ERROR (repl_loop)
     lbu t0, 0(a0)
     beqz t0, repl_loop
     li t1, 10
     beq t0, t1, repl_loop
-    call repl_is_run
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_run
-    la a0, input_line
-    call repl_is_list
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_list
-    la a0, input_line
-    call repl_is_erase
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_erase
-    la a0, input_line
-    call repl_is_load
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_load
-    la a0, input_line
-    call repl_is_save
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_save
-    la a0, input_line
-    call repl_is_help
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_help
-    la a0, input_line
-    call repl_is_quit
-    CHECK_ERROR (repl_loop)
-    beqz a0, safety_near_8
-    j program_exit
-safety_near_8:
-    la a0, input_line
-    call skip_spaces_a0
-    CHECK_ERROR (repl_loop)
-    lbu t0, 0(a0)
     li t1, 48
-    blt t0, t1, repl_immediate
+    bltu t0, t1, repl_dispatch
     li t1, 57
-    bgt t0, t1, repl_immediate
-    la a0, input_line
+    bgtu t0, t1, repl_dispatch
     call repl_store_line
     j repl_loop
+repl_dispatch:
+    sw a0, parse_ptr, t0
+    call read_keyword
+    CHECK_ERROR (repl_loop)
+    # s5 belongs to the top-level dispatch, not to any nested procedure.
+    mv s5, a0
+    li t0, TK_RUN
+    bltu s5, t0, repl_focal
+    li t0, TK_LOAD
+    beq s5, t0, repl_load
+    li t0, TK_SAVE
+    beq s5, t0, repl_save
+    call require_command_end
+    CHECK_ERROR (repl_loop)
+    li t0, TK_RUN
+    beq s5, t0, repl_run
+    li t0, TK_LIST
+    beq s5, t0, repl_list
+    li t0, TK_ERASE
+    beq s5, t0, repl_erase
+    li t0, TK_HELP
+    beq s5, t0, repl_help
+    # Only the exact environment token EXIT reaches process termination.
+    j program_exit
+repl_focal:
+    li t0, TK_GOTO
+    bne s5, t0, repl_immediate
+    # FR-23: argument-less G/GO/GOTO is a FOCAL start request.
+    # An argument follows the unchanged immediate/compiler GOTO path.
+    call skip_parse_spaces
+    CHECK_ERROR (repl_loop)
+    call is_parse_line_end
+    CHECK_ERROR (repl_loop)
+    bnez a0, repl_run
+
 repl_immediate:
     call repl_run_immediate
     j repl_loop
@@ -285,6 +370,8 @@ repl_list:
     j repl_loop
 repl_erase:
     call repl_clear_program
+    call clear_variables
+    call reset_runtime
     j repl_loop
 repl_load:
     call repl_load_file
@@ -315,60 +402,16 @@ rcp_loop:
     j rcp_loop
 rcp_done:
     ret
-normalize_repl_keyword:
-    mv t0, a0
-nrk_skip_spaces:
-    CHECK_PARSE (t0, error_syntax)
-    lbu t1, 0(t0)
-    li t2, 32
-    beq t1, t2, nrk_space_next
-    li t2, 9
-    beq t1, t2, nrk_space_next
-    j nrk_check_number
-nrk_space_next:
-    addi t0, t0, 1
-    j nrk_skip_spaces
-nrk_check_number:
-    li t2, 48
-    blt t1, t2, nrk_upper
-    li t2, 57
-    bgt t1, t2, nrk_upper
-nrk_digits:
-    CHECK_PARSE (t0, error_syntax)
-    lbu t1, 0(t0)
-    li t2, 48
-    blt t1, t2, nrk_after_digits
-    li t2, 57
-    bgt t1, t2, nrk_after_digits
-    addi t0, t0, 1
-    j nrk_digits
-nrk_after_digits:
-    li t2, 58
-    bne t1, t2, nrk_skip_after_number
-    addi t0, t0, 1
-nrk_skip_after_number:
-    CHECK_PARSE (t0, error_syntax)
-    lbu t1, 0(t0)
-    li t2, 32
-    beq t1, t2, nrk_after_space_next
-    li t2, 9
-    beq t1, t2, nrk_after_space_next
-    j nrk_upper
-nrk_after_space_next:
-    addi t0, t0, 1
-    j nrk_skip_after_number
-nrk_upper:
-    CHECK_PARSE (t0, error_syntax)
-    lbu t1, 0(t0)
-    li t2, 97
-    blt t1, t2, nrk_done
-    li t2, 122
-    bgt t1, t2, nrk_done
-    addi t1, t1, -32
-    sb t1, 0(t0)
-    addi t0, t0, 1
-    j nrk_upper
-nrk_done:
+# ERASE is the only command that clears both scalar and indexed variables.
+clear_variables:
+    la t0, vars
+    la t1, arrays_end
+cv_loop:
+    bgeu t0, t1, cv_done
+    sw zero, 0(t0)
+    addi t0, t0, 4
+    j cv_loop
+cv_done:
     ret
 reset_runtime:
     sw zero, error_code, t0
@@ -817,225 +860,87 @@ repl_append_int_to_program_return:
     lw ra, 0(sp)
     addi sp, sp, 32
     ret
-repl_is_run:
+# Read a complete identifier token at parse_ptr, within the bound source span.
+# Returns a0=TK_* (0 unknown), a1=first byte after token; updates parse_ptr.
+# Only comparisons fold ASCII case. Source and literals are never rewritten.
+# Identifier continuation includes digits/_ so SET1 and RUN_X cannot match.
+read_keyword:
+    CHECK_ERROR (safety_return)
+    lw t0, parse_ptr
+    mv t1, t0
+rk_scan:
+    CHECK_PARSE (t1, error_syntax)
+    lbu t2, 0(t1)
+    li t3, 65
+    bltu t2, t3, rk_digit
+    li t3, 90
+    bleu t2, t3, rk_next
+    li t3, 97
+    bltu t2, t3, rk_underscore
+    li t3, 122
+    bleu t2, t3, rk_next
+    j rk_lookup
+rk_digit:
+    li t3, 48
+    bltu t2, t3, rk_lookup
+    li t3, 57
+    bleu t2, t3, rk_next
+    j rk_lookup
+rk_underscore:
+    li t3, 95
+    bne t2, t3, rk_lookup
+rk_next:
+    addi t1, t1, 1
+    j rk_scan
+rk_lookup:
+    mv a1, t1
+    sw t1, parse_ptr, t2
+    la a2, keyword_table
+rk_entry:
+    lw a3, 0(a2)
+    beqz a3, rk_unknown
+    mv a4, t0
+rk_compare:
+    lbu t3, 0(a3)
+    beq a4, a1, rk_at_end
+    beqz t3, rk_mismatch
+    lbu t2, 0(a4)
+    li t4, 97
+    bltu t2, t4, rk_folded
+    li t4, 122
+    bgtu t2, t4, rk_folded
+    addi t2, t2, -32
+rk_folded:
+    bne t2, t3, rk_mismatch
+    addi a4, a4, 1
+    addi a3, a3, 1
+    j rk_compare
+rk_at_end:
+    bnez t3, rk_mismatch
+    lw a0, 4(a2)
+    ret
+rk_mismatch:
+    addi a2, a2, 8
+    j rk_entry
+rk_unknown:
+    li a0, 0
+    ret
+require_command_end:
     ENTER_FRAME (16)
     sw ra, 0(sp)
-    la a0, input_line
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_run_return)
-    lbu t0, 0(a0)
-    li t1, 71
-    beq t0, t1, rir_go
-    li t1, 82
-    bne t0, t1, rir_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, rir_no
-    lbu t0, 1(a0)
-    li t1, 85
-    bne t0, t1, rir_no
-    lw t6, parse_end
-    addi t6, t6, -2
-    bgtu a0, t6, rir_no
-    lbu t0, 2(a0)
-    li t1, 78
-    bne t0, t1, rir_no
-rir_yes:
-    li a0, 1
-repl_is_run_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-rir_go:
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, rir_no
-    lbu t0, 1(a0)
-    li t1, 79
-    beq t0, t1, rir_yes
-    j rir_no
-rir_no:
-    li a0, 0
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-repl_is_list:
-    ENTER_FRAME (16)
-    sw ra, 0(sp)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_list_return)
-    lbu t0, 0(a0)
-    li t1, 76
-    bne t0, t1, ril_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, ril_no
-    lbu t0, 1(a0)
-    li t1, 73
-    bne t0, t1, ril_no
-    li a0, 1
-repl_is_list_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-ril_no:
-    li a0, 0
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-repl_is_erase:
-    ENTER_FRAME (16)
-    sw ra, 0(sp)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_erase_return)
-    lbu t0, 0(a0)
-    li t1, 69
-    bne t0, t1, rie_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, rie_no
-    lbu t0, 1(a0)
-    li t1, 82
-    bne t0, t1, rie_no
-    li a0, 1
-repl_is_erase_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-rie_no:
-    li a0, 0
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-repl_is_load:
-    ENTER_FRAME (16)
-    sw ra, 0(sp)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_load_return)
-    lbu t0, 0(a0)
-    li t1, 76
-    bne t0, t1, rild_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, rild_no
-    lbu t0, 1(a0)
-    li t1, 79
-    bne t0, t1, rild_no
-    lw t6, parse_end
-    addi t6, t6, -2
-    bgtu a0, t6, rild_no
-    lbu t0, 2(a0)
-    li t1, 65
-    bne t0, t1, rild_no
-    lw t6, parse_end
-    addi t6, t6, -3
-    bgtu a0, t6, rild_no
-    lbu t0, 3(a0)
-    li t1, 68
-    bne t0, t1, rild_no
-    li a0, 1
-repl_is_load_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-rild_no:
-    li a0, 0
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-repl_is_save:
-    ENTER_FRAME (16)
-    sw ra, 0(sp)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_save_return)
-    lbu t0, 0(a0)
-    li t1, 83
-    bne t0, t1, risv_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, risv_no
-    lbu t0, 1(a0)
-    li t1, 65
-    bne t0, t1, risv_no
-    lw t6, parse_end
-    addi t6, t6, -2
-    bgtu a0, t6, risv_no
-    lbu t0, 2(a0)
-    li t1, 86
-    bne t0, t1, risv_no
-    lw t6, parse_end
-    addi t6, t6, -3
-    bgtu a0, t6, risv_no
-    lbu t0, 3(a0)
-    li t1, 69
-    bne t0, t1, risv_no
-    li a0, 1
-repl_is_save_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-risv_no:
-    li a0, 0
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-repl_is_help:
-    ENTER_FRAME (16)
-    sw ra, 0(sp)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_help_return)
-    lbu t0, 0(a0)
-    li t1, 72
-    bne t0, t1, rih_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, rih_no
-    lbu t0, 1(a0)
-    li t1, 69
-    bne t0, t1, rih_no
-    lw t6, parse_end
-    addi t6, t6, -2
-    bgtu a0, t6, rih_no
-    lbu t0, 2(a0)
-    li t1, 76
-    bne t0, t1, rih_no
-    lw t6, parse_end
-    addi t6, t6, -3
-    bgtu a0, t6, rih_no
-    lbu t0, 3(a0)
-    li t1, 80
-    bne t0, t1, rih_no
-    li a0, 1
-repl_is_help_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-rih_no:
-    li a0, 0
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-repl_is_quit:
-    ENTER_FRAME (16)
-    sw ra, 0(sp)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_is_quit_return)
-    lbu t0, 0(a0)
-    li t1, 81
-    bne t0, t1, riq_no
-    lw t6, parse_end
-    addi t6, t6, -1
-    bgtu a0, t6, riq_no
-    lbu t0, 1(a0)
-    li t1, 85
-    bne t0, t1, riq_no
-    li a0, 1
-repl_is_quit_return:
-    lw ra, 0(sp)
-    addi sp, sp, 16
-    ret
-riq_no:
-    li a0, 0
+    call skip_parse_spaces
+    CHECK_ERROR (rce_done)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, rce_bad)
+    lbu t1, 0(t0)
+    beqz t1, rce_done
+    li t2, 10
+    beq t1, t2, rce_done
+    li t2, 13
+    beq t1, t2, rce_done
+rce_bad:
+    call error_syntax
+rce_done:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
@@ -1395,40 +1300,42 @@ compile_statement:
     sw ra, 0(sp)
     call skip_parse_spaces
     CHECK_ERROR (compile_statement_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_statement_bad_source)
-    lbu t2, 0(t1)
-    li t3, 83
-    beq t2, t3, cs_set
-    li t3, 115
-    beq t2, t3, cs_set
-    li t3, 84
-    beq t2, t3, cs_type
-    li t3, 116
-    beq t2, t3, cs_type
-    li t3, 65
-    beq t2, t3, cs_ask
-    li t3, 97
-    beq t2, t3, cs_ask
-    li t3, 73
-    beq t2, t3, cs_if
-    li t3, 105
-    beq t2, t3, cs_if
-    li t3, 70
-    beq t2, t3, cs_for
-    li t3, 102
-    beq t2, t3, cs_for
-    li t3, 71
-    beq t2, t3, cs_goto
-    li t3, 103
-    beq t2, t3, cs_goto
-    li t3, 81
-    beq t2, t3, cs_quit
-    li t3, 113
-    beq t2, t3, cs_quit
+    lw t0, parse_ptr
+    sw t0, 4(sp)
+    call read_keyword
+    CHECK_ERROR (compile_statement_return)
+    # Existing compiler procedures consume their own leading keyword.
+    lw t0, 4(sp)
+    sw t0, parse_ptr, t1
+    li t0, TK_SET
+    beq a0, t0, cs_set
+    li t0, TK_TYPE
+    beq a0, t0, cs_type
+    li t0, TK_ASK
+    beq a0, t0, cs_ask
+    li t0, TK_GOTO
+    beq a0, t0, cs_goto
+    li t0, TK_IF
+    beq a0, t0, cs_if
+    li t0, TK_FOR
+    beq a0, t0, cs_for
+    li t0, TK_QUIT
+    beq a0, t0, cs_quit
+    li t0, TK_COMMENT
+    beq a0, t0, cs_done
+    li t0, TK_DO
+    beq a0, t0, cs_deferred
+    li t0, TK_RETURN
+    beq a0, t0, cs_deferred
+    li t0, TK_WRITE
+    beq a0, t0, cs_deferred
     li a0, ERR_SYNTAX
     la a1, err_unknown
+    call set_error
+    j cs_done
+cs_deferred:
+    li a0, ERR_DEFERRED
+    la a1, msg_deferred
     call set_error
     j cs_done
 cs_set:
@@ -1621,26 +1528,23 @@ compile_if:
     CHECK_ERROR (compile_if_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_if_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_if_bad_source)
-    lbu t2, 0(t1)
-    li t3, 84
-    beq t2, t3, cif_then
-    li t3, 116
-    beq t2, t3, cif_then
-    li t3, 71
-    beq t2, t3, cif_goto
-    li t3, 103
-    beq t2, t3, cif_goto
-    li t3, 68
-    beq t2, t3, cif_do
-    li t3, 100
-    beq t2, t3, cif_do
-    j cif_done
+    lw t0, parse_ptr
+    sw t0, 12(sp)
+    call read_keyword
+    CHECK_ERROR (compile_if_return)
+    lw t0, 12(sp)
+    sw t0, parse_ptr, t1
+    li t0, TK_THEN
+    beq a0, t0, cif_then
+    li t0, TK_GOTO
+    beq a0, t0, cif_goto
+    li t0, TK_DO
+    beq a0, t0, cif_do
+    call error_syntax
+    j compile_if_return
 cif_then:
-    addi t1, t1, 4
-    sw t1, 0(t0)
+    call consume_then
+    CHECK_ERROR (compile_if_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_if_return)
     call parse_int
@@ -2790,60 +2694,44 @@ cstr_done:
     sw t1, parse_ptr, t0
     ret
 consume_set:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 3
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_SET
+    j consume_keyword
 consume_type:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 4
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_TYPE
+    j consume_keyword
 consume_ask:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 3
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_ASK
+    j consume_keyword
 consume_if:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 2
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_IF
+    j consume_keyword
 consume_for:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 3
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_FOR
+    j consume_keyword
 consume_goto:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 4
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_GOTO
+    j consume_keyword
 consume_quit:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 4
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
-    ret
+    li a7, TK_QUIT
+    j consume_keyword
 consume_do:
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    addi t1, t1, 2
-    CHECK_PARSE (t1, error_syntax)
-    sw t1, 0(t0)
+    li a7, TK_DO
+    j consume_keyword
+consume_then:
+    li a7, TK_THEN
+    j consume_keyword
+consume_keyword:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    sw a7, 4(sp)
+    call read_keyword
+    CHECK_ERROR (ck_done)
+    lw t0, 4(sp)
+    beq a0, t0, ck_done
+    call error_syntax
+ck_done:
+    lw ra, 0(sp)
+    addi sp, sp, 16
     ret
 consume_equal:
     la t0, parse_ptr

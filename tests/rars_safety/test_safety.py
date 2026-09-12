@@ -186,6 +186,12 @@ test_fail:
         return target + '\n.data\n.align 2\ntest_sp: .word 0\ntest_pass_message: .asciz "PASS\\n"\ntest_fail_message: .asciz "FAIL\\n"\ntest_string: .asciz "\\\"x\\\""\n'
 
     def execute(self, source, expected, stdin=None, files=None):
+        if stdin is not None:
+            # Stage 2 used a final bare QUIT solely as test-session teardown.
+            # FR-15/23 now require EXIT there; stored FOCAL QUIT and every
+            # safety assertion/expected output remain unchanged.
+            self.assertTrue(stdin.endswith('\nQUIT\n'))
+            stdin = stdin.removesuffix('QUIT\n') + 'EXIT\n'
         with tempfile.TemporaryDirectory(prefix="focal-safety-") as directory:
             for name, content in (files or {}).items():
                 (Path(directory) / name).write_text(content, encoding="utf-8", newline="\n")
