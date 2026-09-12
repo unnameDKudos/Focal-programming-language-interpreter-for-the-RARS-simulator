@@ -95,14 +95,72 @@ python tools/embed_rars_demo.py demo/rars/operators.focal -o demo/rars/operators
 
 ## Автоматический запуск RARS
 
-Если есть `rars.jar`, можно запустить интеграционные проверки:
+Из корня репозитория в PowerShell (Java должна быть доступна в PATH):
 
-```bash
-set RARS_JAR=C:\path\to\rars.jar
-python tools/run_rars_tests.py
+```powershell
+$env:RARS_JAR = 'C:\Users\Admin\Desktop\rars1_6\rars1_6.jar'
+py -3 --version
+py -3 -c "import sys; print(sys.executable)"
+java -version
+Get-FileHash -LiteralPath $env:RARS_JAR -Algorithm SHA256
+py -3 -B -m unittest discover -s tests/rars_harness -p "test_*.py" -v
+py -3 -B tools/run_rars_tests.py
+$LASTEXITCODE
 ```
 
-Если `RARS_JAR` не задан, скрипт завершится со статусом skip.
+Можно использовать найденный `python.exe` вместо `py -3`; команда `python`
+не является обязательной. Проверенный baseline: Python 3.14.7, Java
+OpenJDK 17.0.20.1, RARS 1.6 в RV32, Git `34d09ae`. SHA-256 проверенного JAR:
+
+```text
+780F730EB457B1BA609E968ACCC2C8B77D8F92C3D9DBF30CC7FDB3CFB14E8C24
+```
+
+Runner выводит путь Java, путь JAR, его SHA-256, идентификатор известной
+сборки RARS и Git HEAD. Неизвестный hash явно отмечается, версия по нему
+не угадывается. Git нужен только для метаданных; интернет не используется.
+
+Это семь **legacy baseline** тестов: `array_sum`, `for_sum`, `goto`, `hello`,
+`if`, `operators`, `sort`. Их expected-файлы исторически проверялись как
+подстроки, поэтому runner явно выбирает `legacy-substring`: после
+нормализации LF/CRLF применяется прежнее сравнение
+`expected.strip() in stdout.strip()`. Оно допускает дополнительный вывод
+программы и не доказывает полную корректность языка. Файлы ожиданий не изменены.
+
+В `tools/rars_test_support.py` отдельно предусмотрен режим `exact` (по
+умолчанию): сравнение полного stdout, с нормализацией только LF/CRLF, без
+удаления пробелов или последнего перевода строки. Будущие нормативные тесты
+не должны неявно наследовать legacy-режим. Self-tests драйвера не входят в
+40 языковых сценариев ТЗ.
+
+Команда дочернего процесса: `java -jar <jar> nc me ae2 se3 <temporary.asm>`.
+`me` отделяет сообщения RARS в stderr; `ae2` и `se3` задают ненулевые коды
+ошибок ассемблирования и симуляции. Режим RV64 не включается. Только штатное
+сообщение `Program terminated by calling exit` и пустые строки stderr
+считаются нормальным завершением. Остальные диагностики не скрываются,
+даже если stdout содержит ожидаемую подстроку.
+
+Категории отказов: `ENVIRONMENT`, `FIXTURE`, `BUILD`, `ASSEMBLY`,
+`SIMULATION`, `TIMEOUT`, `RARS_DIAGNOSTIC`, `MISMATCH`. Timeout одного
+запуска — 30 секунд; его частичный вывод сохраняется в отчёте. Ошибка одного
+сценария не мешает проверке остальных, если продолжение возможно.
+
+Временные копии ASM создаются в собственном системном `TemporaryDirectory`
+и удаляются после прогона. Исходник и fixtures не перезаписываются;
+заранее существующий `.rars_test_build` не используется и не удаляется.
+Runner работает в batch-режиме, без REPL и ввода ASK.
+
+Успешный результат:
+
+```text
+Passed: 7
+Failed: 0
+```
+
+Код завершения: 0 только при успехе всех семи тестов, 1 при отказах
+сценариев, 2 при общей ошибке окружения. Отсутствующий `RARS_JAR` — ошибка,
+не SKIP. При невозможности начать прогон счётчики равны 0/0, явно указано,
+что тесты не выполнялись, и возвращается код 2.
 
 ## Ограничения
 
