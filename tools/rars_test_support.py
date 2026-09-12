@@ -106,7 +106,8 @@ def _text(value):
     return value or ""
 
 
-def run_rars(environment, asm_path, expected, *, comparison=EXACT, timeout=30):
+def run_rars(environment, asm_path, expected, *, comparison=EXACT, timeout=30,
+             stdin_text=None):
     """Run a batch fixture; check diagnostics before comparing program output.
 
     ae2/se3 replace RARS 1.6's zero default error exit codes. me separates
@@ -119,7 +120,8 @@ def run_rars(environment, asm_path, expected, *, comparison=EXACT, timeout=30):
         result = subprocess.run(
             command, cwd=asm_path.parent, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout,
-            stdin=subprocess.DEVNULL,
+            **({"stdin": subprocess.DEVNULL} if stdin_text is None
+               else {"input": stdin_text}),
         )
     except subprocess.TimeoutExpired as error:
         return RunResult("TIMEOUT", f"RARS exceeded {timeout}s",
