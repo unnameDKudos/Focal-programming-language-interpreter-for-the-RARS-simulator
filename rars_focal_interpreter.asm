@@ -57,6 +57,7 @@ safety_near_6:
 safety_near_7:
 .end_macro
 .eqv ERR_DEFERRED 13
+.eqv ERR_NUMBER 14
 .eqv TK_SET 1
 .eqv TK_TYPE 2
 .eqv TK_ASK 3
@@ -69,6 +70,7 @@ safety_near_7:
 .eqv TK_COMMENT 10
 .eqv TK_WRITE 11
 .eqv TK_THEN 12
+.eqv TK_ALL 13
 .eqv TK_RUN 101
 .eqv TK_LIST 102
 .eqv TK_LOAD 103
@@ -103,6 +105,7 @@ safety_near_7:
 .eqv OP_PRINT_F    65
 .eqv OP_PRINT_NL   66
 .eqv OP_READ_F     67
+.eqv OP_WRITE      68
 .eqv MAX_LINES     128
 .eqv LINE_LEN      128
 .eqv ARRAY_LEN     100
@@ -167,7 +170,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  numbered line     add/replace a stored line; number only deletes\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R WRITE/W: recognized; not implemented yet.\nExpressions, integer line numbers and IF/FOR syntax remain legacy.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer aliases remain temporary; expressions and IF/FOR remain legacy.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -206,6 +209,7 @@ keyword_table:
     .word kw_C, TK_COMMENT
     .word kw_WRITE, TK_WRITE
     .word kw_W, TK_WRITE
+    .word kw_ALL, TK_ALL
     .word kw_THEN, TK_THEN
     .word kw_RUN, TK_RUN
     .word kw_LIST, TK_LIST
@@ -238,6 +242,7 @@ kw_COMMENT: .asciz "COMMENT"
 kw_C: .asciz "C"
 kw_WRITE: .asciz "WRITE"
 kw_W: .asciz "W"
+kw_ALL: .asciz "ALL"
 kw_THEN: .asciz "THEN"
 kw_RUN: .asciz "RUN"
 kw_LIST: .asciz "LIST"
@@ -246,6 +251,8 @@ kw_SAVE: .asciz "SAVE"
 kw_ERASE: .asciz "ERASE"
 kw_HELP: .asciz "HELP"
 kw_EXIT: .asciz "EXIT"
+number_text: .space 8
+msg_number: .asciz "FOCAL/RARS error [E14]: invalid line number or selector\n"
 msg_deferred: .asciz "FOCAL/RARS error [E13]: recognized statement not implemented yet\n"
 .text
 .globl main
@@ -362,11 +369,9 @@ repl_no_program:
     ecall
     j repl_loop
 repl_list:
-    call repl_build_listing
-    CHECK_ERROR (repl_loop)
-    la a0, program_buf
-    li a7, 4
-    ecall
+    li a0, 0
+    li a1, 0
+    call print_source
     j repl_loop
 repl_erase:
     call repl_clear_program
@@ -389,6 +394,7 @@ repl_clear_program:
     la t1, program_buf_ptr
     sw t0, 0(t1)
     sb zero, 0(t0)
+clear_storage_numbers:
     la t0, repl_line_count
     sw zero, 0(t0)
     la t0, repl_numbers
@@ -439,57 +445,49 @@ repl_run_immediate:
     sw ra, 0(sp)
     sw s4, 4(sp)
     la s4, program_buf
-    li a0, 48
-    call repl_append_char_to_program
-    CHECK_ERROR (repl_run_immediate_return)
-    li a0, 58
-    call repl_append_char_to_program
-    CHECK_ERROR (repl_run_immediate_return)
-    li a0, 32
-    call repl_append_char_to_program
-    CHECK_ERROR (repl_run_immediate_return)
+    sb zero, 0(s4)
     la a0, input_line
     call skip_spaces_a0
-    CHECK_ERROR (repl_run_immediate_return)
+    CHECK_ERROR (rri_done)
 rri_copy:
-    CHECK_PARSE (a0, repl_run_immediate_bad_source)
+    CHECK_PARSE (a0, rri_bad)
     lbu t0, 0(a0)
-    beqz t0, rri_copy_done
+    beqz t0, rri_compile
     li t1, 10
-    beq t0, t1, rri_copy_done
+    beq t0, t1, rri_compile
     li t1, 13
-    beq t0, t1, rri_copy_done
+    beq t0, t1, rri_compile
     mv t2, a0
     mv a0, t0
     call repl_append_char_to_program
-    CHECK_ERROR (repl_run_immediate_return)
-    mv a0, t2
-    addi a0, a0, 1
+    CHECK_ERROR (rri_done)
+    addi a0, t2, 1
     j rri_copy
-rri_copy_done:
-    li a0, 10
-    call repl_append_char_to_program
-    CHECK_ERROR (repl_run_immediate_return)
-    sb zero, 0(s4)
+rri_compile:
     call reset_runtime
-    la t0, program_buf
-    la t1, source_ptr
-    sw t0, 0(t1)
-    call compile_program
-    CHECK_ERROR (repl_run_immediate_return)
+    la a0, program_buf
+    li a1, 8192
+    call set_parse_span
+    CHECK_ERROR (rri_done)
+    # Immediate code has no source-line identity: no fake public 0: header.
+    call compile_statement
+    CHECK_ERROR (rri_done)
+    li a0, OP_HALT
+    call emit_word
+    CHECK_ERROR (rri_done)
     la t0, bytecode_buf
-    la t1, pc_ptr
-    sw t0, 0(t1)
+    sw t0, pc_ptr, t1
     call vm_run
-    CHECK_ERROR (repl_run_immediate_return)
-    j repl_run_immediate_return
-repl_run_immediate_bad_source:
+    j rri_done
+rri_bad:
     call error_syntax
-repl_run_immediate_return:
+rri_done:
     lw ra, 0(sp)
     lw s4, 4(sp)
     addi sp, sp, 32
     ret
+# repl_line_count is ACTIVE count, not a high-water slot index.
+# repl_numbers[i]==0 is the sole free-slot marker. Preflight before mutation.
 repl_store_line:
     ENTER_FRAME (32)
     sw ra, 0(sp)
@@ -500,105 +498,109 @@ repl_store_line:
     la a0, input_line
     li a1, 256
     call set_parse_span
-    CHECK_ERROR (repl_store_line_return)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_store_line_return)
-    la t0, parse_ptr
-    sw a0, 0(t0)
-    call parse_int
-    CHECK_ERROR (repl_store_line_return)
+    CHECK_ERROR (rsl_done)
+    call skip_parse_spaces
+    CHECK_ERROR (rsl_done)
+    li a0, 0
+    call parse_program_number
+    CHECK_ERROR (rsl_done)
     mv s0, a0
-    la t0, parse_ptr
-    lw a0, 0(t0)
-    call skip_spaces_a0
-    CHECK_ERROR (repl_store_line_return)
-    CHECK_PARSE (a0, repl_store_line_bad_source)
-    lbu t1, 0(a0)
-    li t2, 58
-    bne t1, t2, rsl_no_colon
+    call skip_parse_spaces
+    CHECK_ERROR (rsl_done)
+    lw a0, parse_ptr
+    lbu t0, 0(a0)
+    li t1, 58
+    bne t0, t1, rsl_after_colon
     addi a0, a0, 1
-rsl_no_colon:
+rsl_after_colon:
     call skip_spaces_a0
-    CHECK_ERROR (repl_store_line_return)
+    CHECK_ERROR (rsl_done)
     mv s1, a0
     mv t0, a0
-    li t2, 0
+    li s3, 0
 rsl_measure:
-    CHECK_PARSE (t0, repl_store_line_bad_source)
-    CHECK_PARSE (t0, repl_store_line_bad_source)
+    CHECK_PARSE (t0, rsl_bad)
     lbu t1, 0(t0)
     beqz t1, rsl_measured
-    li t3, 10
-    beq t1, t3, rsl_measured
-    addi t2, t2, 1
-    li t3, LINE_LEN
-    bgeu t2, t3, rsl_text_error
+    li t2, 10
+    beq t1, t2, rsl_measured
+    li t2, 13
+    beq t1, t2, rsl_measured
+    addi s3, s3, 1
+    li t2, LINE_LEN
+    bgeu s3, t2, rsl_text_error
     addi t0, t0, 1
     j rsl_measure
-rsl_text_error:
-    call error_text
-    j rsl_done
-rsl_capacity_error:
-    call error_lines
-    j rsl_done
 rsl_measured:
     mv a0, s0
     call repl_find_line
-    CHECK_ERROR (repl_store_line_return)
+    CHECK_ERROR (rsl_done)
     mv s2, a0
-    CHECK_PARSE (s1, repl_store_line_bad_source)
-    lbu t0, 0(s1)
-    beqz t0, rsl_delete
-    li t1, 10
-    beq t0, t1, rsl_delete
-    bltz s2, rsl_new
-    mv s3, s2
-    j rsl_copy
-rsl_new:
-    la t0, repl_line_count
-    lw s3, 0(t0)
+    beqz s3, rsl_delete
+    bgez s2, rsl_copy
+    lw t0, repl_line_count
     li t1, MAX_LINES
-    bgeu s3, t1, rsl_capacity_error
-    addi t2, s3, 1
-    sw t2, 0(t0)
+    bgeu t0, t1, rsl_full
+    li s2, 0
+    la t0, repl_numbers
+rsl_find_free:
+    li t1, MAX_LINES
+    bgeu s2, t1, rsl_full
+    lw t1, 0(t0)
+    beqz t1, rsl_copy
+    addi s2, s2, 1
+    addi t0, t0, 4
+    j rsl_find_free
 rsl_copy:
-    slli t0, s3, 2
-    la t1, repl_numbers
-    add t1, t1, t0
-    sw s0, 0(t1)
-    mv a0, s3
+    mv a0, s2
     call repl_text_addr
-    CHECK_ERROR (repl_store_line_return)
+    CHECK_ERROR (rsl_done)
+    # All remaining writes are within the preflighted source and slot.
     mv t0, a0
     mv t1, s1
-    li t2, LINE_LEN
-    addi t2, t2, -1
+    mv t2, s3
 rsl_copy_loop:
-    beqz t2, rsl_copy_done
-    CHECK_PARSE (t1, repl_store_line_bad_source)
+    beqz t2, rsl_commit
     lbu t3, 0(t1)
-    beqz t3, rsl_copy_done
-    li t4, 10
-    beq t3, t4, rsl_copy_done
     sb t3, 0(t0)
     addi t0, t0, 1
     addi t1, t1, 1
     addi t2, t2, -1
     j rsl_copy_loop
-rsl_copy_done:
+rsl_commit:
     sb zero, 0(t0)
+    slli t0, s2, 2
+    la t1, repl_numbers
+    add t1, t1, t0
+    lw t2, 0(t1)
+    bnez t2, rsl_set_key
+    lw t2, repl_line_count
+    addi t2, t2, 1
+    sw t2, repl_line_count, t0
+rsl_set_key:
+    sw s0, 0(t1)
     j rsl_done
 rsl_delete:
     bltz s2, rsl_done
+    lw t0, repl_line_count
+    beqz t0, rsl_full
     slli t0, s2, 2
     la t1, repl_numbers
     add t1, t1, t0
     sw zero, 0(t1)
-rsl_done:
-    j repl_store_line_return
-repl_store_line_bad_source:
+    lw t0, repl_line_count
+    addi t0, t0, -1
+    sw t0, repl_line_count, t1
+    j rsl_done
+rsl_text_error:
+    call error_text
+    j rsl_done
+rsl_full:
+    call error_lines
+    j rsl_done
+rsl_bad:
     call error_syntax
-repl_store_line_return:
+rsl_done:
     lw ra, 0(sp)
     lw s0, 4(sp)
     lw s1, 8(sp)
@@ -614,6 +616,7 @@ repl_find_line:
     bleu t1, t6, safety_near_9
     j error_lines
 safety_near_9:
+    li t1, MAX_LINES
     li t2, 0
 rfl_loop:
     bge t2, t1, rfl_not_found
@@ -641,145 +644,63 @@ safety_near_10:
     la a0, repl_texts
     add a0, a0, t1
     ret
+# RUN/SAVE retain the bounded 8-KiB staging buffer. LIST/WRITE stream directly.
 repl_build_program:
-    ENTER_FRAME (48)
+    ENTER_FRAME (32)
     sw ra, 0(sp)
     sw s0, 4(sp)
     sw s1, 8(sp)
-    sw s2, 12(sp)
-    sw s3, 16(sp)
-    sw s4, 20(sp)
+    sw s4, 12(sp)
     la s4, program_buf
     sb zero, 0(s4)
     li s0, 0
-rbp_outer:
-    li s1, 0
-    li s2, 100000
-    la t0, repl_line_count
-    lw s3, 0(t0)
-    li t6, MAX_LINES
-    bgtu s3, t6, repl_build_program_capacity_error
-    li t1, 0
-rbp_find:
-    bge t1, s3, rbp_emit
-    slli t2, t1, 2
-    la t3, repl_numbers
-    add t3, t3, t2
-    lw t4, 0(t3)
-    beqz t4, rbp_next
-    ble t4, s0, rbp_next
-    bge t4, s2, rbp_next
-    mv s2, t4
-    mv s1, t1
-rbp_next:
-    addi t1, t1, 1
-    j rbp_find
-rbp_emit:
-    li t0, 100000
-    beq s2, t0, rbp_done
-    mv a0, s2
-    call repl_append_int_to_program
-    CHECK_ERROR (repl_build_program_return)
-    li a0, 58
+rbp_loop:
+    mv a0, s0
+    li a1, 101
+    li a2, 9999
+    call find_next_slot
+    CHECK_ERROR (rbp_done)
+    bltz a0, rbp_complete
+    mv s0, a1
+    mv s1, a0
+    mv a0, s0
+    call format_line_number
+    CHECK_ERROR (rbp_done)
+    mv t0, a0
+rbp_number:
+    lbu a0, 0(t0)
+    beqz a0, rbp_text
     call repl_append_char_to_program
-    CHECK_ERROR (repl_build_program_return)
+    CHECK_ERROR (rbp_done)
+    addi t0, t0, 1
+    j rbp_number
+rbp_text:
     li a0, 32
     call repl_append_char_to_program
-    CHECK_ERROR (repl_build_program_return)
+    CHECK_ERROR (rbp_done)
     mv a0, s1
     call repl_text_addr
-    CHECK_ERROR (repl_build_program_return)
+    CHECK_ERROR (rbp_done)
     call repl_append_string_to_program
-    CHECK_ERROR (repl_build_program_return)
+    CHECK_ERROR (rbp_done)
     li a0, 10
     call repl_append_char_to_program
-    CHECK_ERROR (repl_build_program_return)
-    mv s0, s2
-    j rbp_outer
+    CHECK_ERROR (rbp_done)
+    j rbp_loop
+rbp_complete:
+    sw s4, program_buf_ptr, t0
 rbp_done:
-    sb zero, 0(s4)
-    la t0, program_buf_ptr
-    sw s4, 0(t0)
-    j repl_build_program_return
-repl_build_program_capacity_error:
-    call error_lines
-repl_build_program_return:
     lw ra, 0(sp)
     lw s0, 4(sp)
     lw s1, 8(sp)
-    lw s2, 12(sp)
-    lw s3, 16(sp)
-    lw s4, 20(sp)
-    addi sp, sp, 48
+    lw s4, 12(sp)
+    addi sp, sp, 32
     ret
+# Compatibility entry point: no separate listing implementation.
 repl_build_listing:
-    ENTER_FRAME (48)
-    sw ra, 0(sp)
-    sw s0, 4(sp)
-    sw s1, 8(sp)
-    sw s2, 12(sp)
-    sw s3, 16(sp)
-    sw s4, 20(sp)
-    la s4, program_buf
-    sb zero, 0(s4)
-    li s0, 0
-rbl_outer:
-    li s1, 0
-    li s2, 100000
-    la t0, repl_line_count
-    lw s3, 0(t0)
-    li t6, MAX_LINES
-    bgtu s3, t6, repl_build_listing_capacity_error
-    li t1, 0
-rbl_find:
-    bge t1, s3, rbl_emit
-    slli t2, t1, 2
-    la t3, repl_numbers
-    add t3, t3, t2
-    lw t4, 0(t3)
-    beqz t4, rbl_next
-    ble t4, s0, rbl_next
-    bge t4, s2, rbl_next
-    mv s2, t4
-    mv s1, t1
-rbl_next:
-    addi t1, t1, 1
-    j rbl_find
-rbl_emit:
-    li t0, 100000
-    beq s2, t0, rbl_done
-    mv a0, s2
-    call repl_append_int_to_program
-    CHECK_ERROR (repl_build_listing_return)
-    li a0, 32
-    call repl_append_char_to_program
-    CHECK_ERROR (repl_build_listing_return)
-    mv a0, s1
-    call repl_text_addr
-    CHECK_ERROR (repl_build_listing_return)
-    call repl_append_string_to_program
-    CHECK_ERROR (repl_build_listing_return)
-    li a0, 10
-    call repl_append_char_to_program
-    CHECK_ERROR (repl_build_listing_return)
-    mv s0, s2
-    j rbl_outer
-rbl_done:
-    sb zero, 0(s4)
-    la t0, program_buf_ptr
-    sw s4, 0(t0)
-    j repl_build_listing_return
-repl_build_listing_capacity_error:
-    call error_lines
-repl_build_listing_return:
-    lw ra, 0(sp)
-    lw s0, 4(sp)
-    lw s1, 8(sp)
-    lw s2, 12(sp)
-    lw s3, 16(sp)
-    lw s4, 20(sp)
-    addi sp, sp, 48
-    ret
+    li a0, 0
+    li a1, 0
+    j print_source
 # Private append convention: s4 is in/out; t0/t2..t4 survive the call.
 repl_append_char_to_program:
     CHECK_ERROR (safety_return)
@@ -1008,7 +929,7 @@ repl_load_file:
     sb zero, 0(t1)
     # Snapshot only after a bounded file read. Restore on any import error.
     call repl_snapshot
-    sw zero, repl_line_count, t0
+    call clear_storage_numbers
     la a0, program_buf
     call repl_import_program_buf
     lw t0, error_code
@@ -1203,74 +1124,191 @@ sl_done:
 program_exit:
     li a7, 10
     ecall
+# Two phases: collect canonical source identities, then emit in key order.
+# Until compilation succeeds, line_offsets holds bounded source pointers;
+# the emission pass replaces every entry with its actual wordcode address.
+# VM must only run after the caller has checked error_code (stage-2 contract).
 compile_program:
     ENTER_FRAME (32)
     sw ra, 0(sp)
     sw s0, 4(sp)
     sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
     lw a0, source_ptr
     la t0, program_buf
     li a1, 8192
     beq a0, t0, cp_bind
     la t0, focal_program
-    bne a0, t0, compile_program_bad_source
+    bne a0, t0, cp_bad
     la a1, focal_program_end
     sub a1, a1, a0
 cp_bind:
     call set_parse_span
-    CHECK_ERROR (compile_program_return)
+    CHECK_ERROR (cp_done)
     mv s0, a0
-cp_loop:
+    li s3, 0
+    sw zero, line_count, t0
+cp_collect:
     mv a0, s0
     call skip_spaces_a0
-    CHECK_ERROR (compile_program_return)
+    CHECK_ERROR (cp_done)
     mv s0, a0
-    CHECK_PARSE (s0, compile_program_bad_source)
     lbu t0, 0(s0)
-    beqz t0, cp_done
-    la t1, parse_ptr
-    sw s0, 0(t1)
-    call parse_int
-    CHECK_ERROR (compile_program_return)
+    beqz t0, cp_sort_begin
+    li t1, 10
+    beq t0, t1, cp_next_source
+    li t1, 13
+    beq t0, t1, cp_next_source
+    sw s0, parse_ptr, t0
+    li a0, 0
+    call parse_program_number
+    CHECK_ERROR (cp_done)
     mv s1, a0
-    la t0, parse_ptr
-    lw s0, 0(t0)
-    CHECK_PARSE (s0, compile_program_bad_source)
-    lbu t1, 0(s0)
-    li t2, 58
-    bne t1, t2, cp_skip_line
+    call skip_parse_spaces
+    CHECK_ERROR (cp_done)
+    lw a0, parse_ptr
+    lbu t0, 0(a0)
+    li t1, 58
+    bne t0, t1, cp_separator
+    addi a0, a0, 1
+cp_separator:
+    call skip_spaces_a0
+    CHECK_ERROR (cp_done)
+    mv s2, a0
+    mv s0, a0
+    li s4, 0
+    la t0, line_numbers
+cp_find_existing:
+    bgeu s4, s3, cp_record
+    lw t1, 0(t0)
+    beq t1, s1, cp_record
+    addi t0, t0, 4
+    addi s4, s4, 1
+    j cp_find_existing
+cp_record:
+    lbu t0, 0(s2)
+    beqz t0, cp_delete
+    li t1, 10
+    beq t0, t1, cp_delete
+    li t1, 13
+    beq t0, t1, cp_delete
+    bltu s4, s3, cp_store
+    li t0, MAX_LINES
+    bgeu s3, t0, cp_full
+    addi s3, s3, 1
+cp_store:
+    slli t0, s4, 2
+    la t1, line_numbers
+    add t1, t1, t0
+    sw s1, 0(t1)
+    la t1, line_offsets
+    add t1, t1, t0
+    sw s2, 0(t1)
+    j cp_scan_tail
+cp_delete:
+    bgeu s4, s3, cp_scan_tail
+    addi s3, s3, -1
+    slli t0, s3, 2
+    slli t1, s4, 2
+    la t2, line_numbers
+    add t3, t2, t0
+    add t2, t2, t1
+    lw t4, 0(t3)
+    sw t4, 0(t2)
+    la t2, line_offsets
+    add t3, t2, t0
+    add t2, t2, t1
+    lw t4, 0(t3)
+    sw t4, 0(t2)
+cp_scan_tail:
+    sw s3, line_count, t0
+    CHECK_PARSE (s0, cp_bad)
+    lbu t0, 0(s0)
+    beqz t0, cp_sort_begin
+    li t1, 10
+    beq t0, t1, cp_next_source
     addi s0, s0, 1
-    sw s0, 0(t0)
-    mv a0, s1
-    call add_line_table_entry
-    CHECK_ERROR (compile_program_return)
+    j cp_scan_tail
+cp_next_source:
+    addi s0, s0, 1
+    j cp_collect
+cp_sort_begin:
+    sw s3, line_count, t0
+    li s0, 0
+cp_sort_outer:
+    bgeu s0, s3, cp_emit_begin
+    mv s1, s0
+    slli t0, s0, 2
+    la t1, line_numbers
+    add t1, t1, t0
+    lw s2, 0(t1)
+    addi t0, s0, 1
+cp_sort_inner:
+    bgeu t0, s3, cp_sort_swap
+    slli t1, t0, 2
+    la t2, line_numbers
+    add t2, t2, t1
+    lw t3, 0(t2)
+    bgeu t3, s2, cp_sort_next
+    mv s1, t0
+    mv s2, t3
+cp_sort_next:
+    addi t0, t0, 1
+    j cp_sort_inner
+cp_sort_swap:
+    slli t0, s0, 2
+    slli t1, s1, 2
+    la t2, line_numbers
+    add t3, t2, t0
+    add t2, t2, t1
+    lw t4, 0(t3)
+    lw t5, 0(t2)
+    sw t5, 0(t3)
+    sw t4, 0(t2)
+    la t2, line_offsets
+    add t3, t2, t0
+    add t2, t2, t1
+    lw t4, 0(t3)
+    lw t5, 0(t2)
+    sw t5, 0(t3)
+    sw t4, 0(t2)
+    addi s0, s0, 1
+    j cp_sort_outer
+cp_emit_begin:
+    li s0, 0
+cp_emit_loop:
+    bgeu s0, s3, cp_halt
+    slli t0, s0, 2
+    la t1, line_offsets
+    add t1, t1, t0
+    lw t2, 0(t1)
+    sw t2, parse_ptr, t0
+    lw t2, bc_ptr
+    la t3, bytecode_buf
+    sub t2, t2, t3
+    sw t2, 0(t1)
     call compile_statement
-    CHECK_ERROR (compile_program_return)
-cp_skip_line:
-    la t0, parse_ptr
-    lw s0, 0(t0)
-cp_advance:
-    CHECK_PARSE (s0, compile_program_bad_source)
-    lbu t1, 0(s0)
-    beqz t1, cp_done
-    li t2, 10
-    beq t1, t2, cp_next
+    CHECK_ERROR (cp_done)
     addi s0, s0, 1
-    j cp_advance
-cp_next:
-    addi s0, s0, 1
-    j cp_loop
-cp_done:
+    j cp_emit_loop
+cp_halt:
     li a0, OP_HALT
     call emit_word
-    CHECK_ERROR (compile_program_return)
-    j compile_program_return
-compile_program_bad_source:
+    j cp_done
+cp_full:
+    call error_lines
+    j cp_done
+cp_bad:
     call error_syntax
-compile_program_return:
+cp_done:
+    lw ra, 0(sp)
     lw s0, 4(sp)
     lw s1, 8(sp)
-    lw ra, 0(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
     addi sp, sp, 32
     ret
 add_line_table_entry:
@@ -1289,6 +1327,8 @@ safety_near_16:
     sw a0, 0(t3)
     la t4, bc_ptr
     lw t5, 0(t4)
+    la t4, bytecode_buf
+    sub t5, t5, t4
     la t3, line_offsets
     add t3, t3, t2
     sw t5, 0(t3)
@@ -1328,10 +1368,14 @@ compile_statement:
     li t0, TK_RETURN
     beq a0, t0, cs_deferred
     li t0, TK_WRITE
-    beq a0, t0, cs_deferred
+    beq a0, t0, cs_write
     li a0, ERR_SYNTAX
     la a1, err_unknown
     call set_error
+    j cs_done
+cs_write:
+    call compile_write
+    CHECK_ERROR (compile_statement_return)
     j cs_done
 cs_deferred:
     li a0, ERR_DEFERRED
@@ -1547,7 +1591,8 @@ cif_then:
     CHECK_ERROR (compile_if_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_if_return)
-    call parse_int
+    li a0, 0
+    call parse_program_number
     CHECK_ERROR (compile_if_return)
     sw a0, 4(sp)
     li a0, OP_JUMP_NZ
@@ -1562,7 +1607,8 @@ cif_goto:
     CHECK_ERROR (compile_if_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_if_return)
-    call parse_int
+    li a0, 0
+    call parse_program_number
     CHECK_ERROR (compile_if_return)
     sw a0, 4(sp)
     li a0, OP_JUMP_NZ
@@ -1610,7 +1656,8 @@ compile_goto:
     CHECK_ERROR (compile_goto_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_goto_return)
-    call parse_int
+    li a0, 0
+    call parse_program_number
     CHECK_ERROR (compile_goto_return)
     sw a0, 4(sp)
     li a0, OP_JUMP
@@ -2060,6 +2107,10 @@ vm_loop:
     call fetch_word
     CHECK_ERROR (vm_run_return)
     mv s1, a0
+    li t1, OP_WRITE
+    bne s1, t1, vm_not_write
+    j vm_write
+vm_not_write:
     li t1, OP_PUSH_F
     beq s1, t1, vm_push_f
     li t1, OP_PUSH_V
@@ -2383,6 +2434,17 @@ vm_read_f:
     call vm_push_ft0
     CHECK_ERROR (vm_run_return)
     j vm_loop
+vm_write:
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv s2, a0
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv a1, a0
+    mv a0, s2
+    call print_source
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
 vm_halt:
 vm_run_return:
     lw s0, 4(sp)
@@ -2542,10 +2604,19 @@ sptl_found:
     la t4, line_offsets
     add t4, t4, t3
     lw t5, 0(t4)
-    mv a0, t5
+    andi t6, t5, 3
+    bnez t6, sptl_bad_offset
+    la t0, bytecode_buf
+    lw t1, bc_ptr
+    sub t1, t1, t0
+    bgeu t5, t1, sptl_bad_offset
+    add a0, t0, t5
     call set_pc_absolute
     CHECK_ERROR (set_pc_to_line_return)
     j sptl_done
+sptl_bad_offset:
+    call error_bc_access
+    j set_pc_to_line_return
 sptl_fail:
     li a0, ERR_LINES
     la a1, err_line
@@ -2892,4 +2963,350 @@ validate_input:
 vi_done:
     lw ra, 0(sp)
     addi sp, sp, 16
+    ret
+
+
+# One integer representation everywhere: group*100 + line, 101..9999,
+# excluding keys ending in 00. No floating point is used for source numbers.
+# a0=0: line number (temporary legacy integer ordinal allowed, 1..9801);
+# a0=1: WRITE selector (bare integer is group, never a legacy line alias).
+# Result a0=key, a1=2 exact line / 1 group; parse_ptr advances on success only.
+parse_program_number:
+    CHECK_ERROR (safety_return)
+    mv a2, a0
+    lw t1, parse_ptr
+    li t2, 0
+    li t3, 0
+pn_group:
+    CHECK_PARSE (t1, error_number)
+    lbu t0, 0(t1)
+    li t6, 48
+    bltu t0, t6, pn_group_done
+    li t6, 57
+    bgtu t0, t6, pn_group_done
+    addi t3, t3, 1
+    li t6, 4
+    bgtu t3, t6, error_number
+    li t6, 10
+    mul t2, t2, t6
+    addi t0, t0, -48
+    add t2, t2, t0
+    addi t1, t1, 1
+    j pn_group
+pn_group_done:
+    beqz t3, error_number
+    beqz t2, error_number
+    li t6, 46
+    bne t0, t6, pn_integer
+    li t6, 2
+    bgtu t3, t6, error_number
+    li t6, 99
+    bgtu t2, t6, error_number
+    addi t1, t1, 1
+    li t4, 0
+    li t5, 0
+pn_fraction:
+    CHECK_PARSE (t1, error_number)
+    lbu t0, 0(t1)
+    li t6, 48
+    bltu t0, t6, pn_fraction_done
+    li t6, 57
+    bgtu t0, t6, pn_fraction_done
+    addi t5, t5, 1
+    li t6, 2
+    bgtu t5, t6, error_number
+    li t6, 10
+    mul t4, t4, t6
+    addi t0, t0, -48
+    add t4, t4, t0
+    addi t1, t1, 1
+    j pn_fraction
+pn_fraction_done:
+    beqz t5, error_number
+    beqz t4, error_number
+    li t6, 1
+    bne t5, t6, pn_key
+    li t6, 10
+    mul t4, t4, t6
+pn_key:
+    li t6, 100
+    mul a0, t2, t6
+    add a0, a0, t4
+    li a1, 2
+    j pn_delimiter
+pn_integer:
+    beqz a2, pn_legacy
+    li t6, 99
+    bgtu t2, t6, error_number
+    li t6, 2
+    bgtu t3, t6, error_number
+    li t6, 100
+    mul a0, t2, t6
+    li a1, 1
+    j pn_delimiter
+pn_legacy:
+    # Migration only: N -> ordinal among 99 lines per group, not decimal N.
+    li t6, 9801
+    bgtu t2, t6, error_number
+    addi t2, t2, -1
+    li t6, 99
+    divu t4, t2, t6
+    remu t5, t2, t6
+    addi t4, t4, 1
+    li t6, 100
+    mul a0, t4, t6
+    addi t5, t5, 1
+    add a0, a0, t5
+    li a1, 2
+pn_delimiter:
+    beqz t0, pn_ok
+    li t6, 32
+    beq t0, t6, pn_ok
+    li t6, 9
+    beq t0, t6, pn_ok
+    li t6, 10
+    beq t0, t6, pn_ok
+    li t6, 13
+    beq t0, t6, pn_ok
+    li t6, 58
+    bne t0, t6, error_number
+    bnez a2, error_number
+pn_ok:
+    sw t1, parse_ptr, t6
+    ret
+error_number:
+    li a0, ERR_NUMBER
+    la a1, msg_number
+    j set_error
+
+# Format a validated canonical key into a fixed 8-byte scratch buffer.
+# g.ll is at most five bytes + NUL. Shared by RUN/SAVE builders and LIST/WRITE.
+format_line_number:
+    CHECK_ERROR (safety_return)
+    li t0, 101
+    bltu a0, t0, error_number
+    li t0, 9999
+    bgtu a0, t0, error_number
+    li t0, 100
+    divu t1, a0, t0
+    remu t2, a0, t0
+    beqz t2, error_number
+    la t3, number_text
+    li t0, 10
+    bltu t1, t0, fln_units
+    divu t4, t1, t0
+    addi t4, t4, 48
+    sb t4, 0(t3)
+    addi t3, t3, 1
+fln_units:
+    remu t1, t1, t0
+    addi t1, t1, 48
+    sb t1, 0(t3)
+    li t1, 46
+    sb t1, 1(t3)
+    divu t1, t2, t0
+    remu t2, t2, t0
+    addi t1, t1, 48
+    addi t2, t2, 48
+    sb t1, 2(t3)
+    sb t2, 3(t3)
+    sb zero, 4(t3)
+    la a0, number_text
+    ret
+
+# Common sorted traversal: a0=previous key, a1=lower, a2=upper (inclusive).
+# Returns a0=physical slot (-1 if absent), a1=key. Zero slots are inactive.
+find_next_slot:
+    CHECK_ERROR (safety_return)
+    lw t0, repl_line_count
+    li t6, MAX_LINES
+    bgtu t0, t6, error_lines
+    li t0, 0
+    li t1, 10000
+    li a3, -1
+    la t2, repl_numbers
+fns_loop:
+    li t6, MAX_LINES
+    bgeu t0, t6, fns_done
+    lw t3, 0(t2)
+    beqz t3, fns_next
+    li t6, 101
+    bltu t3, t6, error_number
+    li t6, 9999
+    bgtu t3, t6, error_number
+    li t6, 100
+    remu t4, t3, t6
+    beqz t4, error_number
+    bleu t3, a0, fns_next
+    bltu t3, a1, fns_next
+    bgtu t3, a2, fns_next
+    bgeu t3, t1, fns_next
+    mv t1, t3
+    mv a3, t0
+fns_next:
+    addi t0, t0, 1
+    addi t2, t2, 4
+    j fns_loop
+fns_done:
+    mv a0, a3
+    mv a1, t1
+    ret
+
+# Check a physical slot's NUL before syscall PrintString may see its text.
+check_slot_text:
+    CHECK_ERROR (safety_return)
+    la t0, repl_texts
+    bltu a0, t0, error_text
+    la t1, repl_texts_end
+    bgeu a0, t1, error_text
+    sub t0, a0, t0
+    andi t0, t0, 127
+    bnez t0, error_text
+    mv t0, a0
+    addi t1, a0, LINE_LEN
+cst_scan:
+    bgeu t0, t1, error_text
+    lbu t2, 0(t0)
+    beqz t2, safety_return
+    addi t0, t0, 1
+    j cst_scan
+
+# LIST and VM WRITE share this streaming view, independent of program_buf.
+# a0=0 all, 1 group (a1=group*100), 2 exact canonical key.
+print_source:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    sw s5, 24(sp)
+    mv s5, a0
+    li s1, 101
+    li s2, 9999
+    li s0, 0
+    li s3, 0
+    beqz a0, ps_loop
+    li t0, 2
+    bgtu a0, t0, ps_bad
+    mv s1, a1
+    mv s2, a1
+    li t0, 1
+    bne a0, t0, ps_exact
+    li t0, 100
+    bltu a1, t0, ps_bad
+    li t1, 9900
+    bgtu a1, t1, ps_bad
+    remu t1, a1, t0
+    bnez t1, ps_bad
+    addi s1, s1, 1
+    addi s2, s2, 99
+    j ps_loop
+ps_exact:
+    mv a0, a1
+    call format_line_number
+    CHECK_ERROR (ps_done)
+ps_loop:
+    mv a0, s0
+    mv a1, s1
+    mv a2, s2
+    call find_next_slot
+    CHECK_ERROR (ps_done)
+    bltz a0, ps_end
+    mv s0, a1
+    call repl_text_addr
+    CHECK_ERROR (ps_done)
+    mv s4, a0
+    call check_slot_text
+    CHECK_ERROR (ps_done)
+    mv a0, s0
+    call format_line_number
+    CHECK_ERROR (ps_done)
+    li a7, 4
+    ecall
+    li a0, 32
+    li a7, 11
+    ecall
+    mv a0, s4
+    li a7, 4
+    ecall
+    li a0, 10
+    li a7, 11
+    ecall
+    addi s3, s3, 1
+    j ps_loop
+ps_end:
+    bnez s3, ps_done
+    beqz s5, ps_done
+    li a0, ERR_LINES
+    la a1, err_line
+    call set_error
+    j ps_done
+ps_bad:
+    call error_number
+ps_done:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    lw s5, 24(sp)
+    addi sp, sp, 48
+    ret
+
+consume_write:
+    li a7, TK_WRITE
+    j consume_keyword
+compile_write:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw zero, 4(sp)
+    sw zero, 8(sp)
+    call consume_write
+    CHECK_ERROR (cw_done)
+    call skip_parse_spaces
+    CHECK_ERROR (cw_done)
+    call is_parse_line_end
+    CHECK_ERROR (cw_done)
+    bnez a0, cw_emit
+    lw t0, parse_ptr
+    lbu t1, 0(t0)
+    li t2, 48
+    bltu t1, t2, cw_all
+    li t2, 57
+    bgtu t1, t2, cw_all
+    li a0, 1
+    call parse_program_number
+    CHECK_ERROR (cw_done)
+    sw a0, 8(sp)
+    sw a1, 4(sp)
+    j cw_end
+cw_all:
+    call read_keyword
+    CHECK_ERROR (cw_done)
+    li t0, TK_ALL
+    bne a0, t0, cw_bad
+cw_end:
+    call skip_parse_spaces
+    CHECK_ERROR (cw_done)
+    call is_parse_line_end
+    CHECK_ERROR (cw_done)
+    beqz a0, cw_bad
+cw_emit:
+    li a0, OP_WRITE
+    call emit_word
+    CHECK_ERROR (cw_done)
+    lw a0, 4(sp)
+    call emit_word
+    CHECK_ERROR (cw_done)
+    lw a0, 8(sp)
+    call emit_word
+    j cw_done
+cw_bad:
+    call error_number
+cw_done:
+    lw ra, 0(sp)
+    addi sp, sp, 32
     ret

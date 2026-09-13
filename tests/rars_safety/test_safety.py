@@ -139,7 +139,7 @@ CASES.update({
     "invalid_push_pointer": "li t0, -4\nsw t0, vm_sp_ptr, t1\ncall vm_push_ft0\n" + error_is("ERR_VM_OVERFLOW") + pointer_is("vm_sp_ptr", "vm_stack"),
     "last_pool_string": "la a0, test_string\nli a1, 4\ncall set_parse_span\nla t0, str_pool_end\naddi t0, t0, -2\nsw t0, str_pool_ptr, t1\ncall copy_string_to_pool\nlbu t0, 0(a0)\nli t1, 120\nbne t0, t1, test_fail\nlbu t0, 1(a0)\nbnez t0, test_fail\n" + pointer_is("str_pool_ptr", "str_pool_end") + error_is("0"),
     "unterminated_pool_operand": "la t0, str_pool\nli t1, 65\nsb t1, 0(t0)\naddi t1, t0, 1\nsw t1, str_pool_ptr, t2\nmv a0, t0\ncall check_pool_string\n" + error_is("ERR_STRING"),
-    "last_line_entry": "li t0, 127\nsw t0, line_count, t1\nli a0, 128\ncall add_line_table_entry\nlw t0, line_count\nli t1, 128\nbne t0, t1, test_fail\nla t0, line_offsets_end\nlw t1, -4(t0)\nla t2, bytecode_buf\nbne t1, t2, test_fail\n" + error_is("0"),
+    "last_line_entry": "li t0, 127\nsw t0, line_count, t1\nli a0, 128\ncall add_line_table_entry\nlw t0, line_count\nli t1, 128\nbne t0, t1, test_fail\nla t0, line_offsets_end\nlw t1, -4(t0)\nbnez t1, test_fail\n" + error_is("0"),
     "corrupt_line_lookup_count": "li t0, -1\nsw t0, line_count, t1\nli a0, 1\ncall set_pc_to_line\n" + error_is("ERR_LINES"),
     "corrupt_repl_lookup_count": "li t0, -1\nsw t0, repl_line_count, t1\ncall repl_find_line\n" + error_is("ERR_LINES"),
     "last_repl_slot": "li a0, 127\ncall repl_text_addr\nla t0, repl_texts_end\naddi t0, t0, -128\nbne a0, t0, test_fail\n" + error_is("0"),
@@ -209,14 +209,14 @@ test_fail:
         commands = '1 TYPE "KEEP",!\nTYPE A(100),!\nTYPE "AFTER",!\nLIST\nQUIT\n'
         expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n> > '
                     'FOCAL/RARS error [E09]: variable/array bounds\n'
-                    '> AFTER\n> 1 TYPE "KEEP",!\n> ')
+                    '> AFTER\n> 1.01 TYPE "KEEP",!\n> ')
         self.execute(self.source, expected, commands)
 
     def test_long_replacement_keeps_original(self):
         commands = '1 TYPE "KEEP",!\n1 ' + 'X' * 128 + '\nLIST\nQUIT\n'
         expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n> > '
                     'FOCAL/RARS error [E07]: text buffer bounds\n'
-                    '> 1 TYPE "KEEP",!\n> ')
+                    '> 1.01 TYPE "KEEP",!\n> ')
         self.execute(self.source, expected, commands)
 
     def test_repeated_compile_errors_recover(self):
@@ -229,7 +229,7 @@ test_fail:
             commands += command + '\nTYPE "AFTER",!\n'
             expected += f'FOCAL/RARS error [E{code:02}]: {messages[code]}\n> AFTER\n> '
         commands += 'LIST\nQUIT\n'
-        expected += '1 TYPE "KEEP",!\n> '
+        expected += '1.01 TYPE "KEEP",!\n> '
         self.execute(self.source, expected, commands)
 
     def test_full_input_rejected_without_truncation(self):
@@ -251,7 +251,7 @@ test_fail:
         commands += 'RUN\n' + ''.join(f'{n}\n' for n in range(2, 70)) + 'LIST\nQUIT\n'
         expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n' + '> ' * 70
                     + 'FOCAL/RARS error [E06]: program buffer bounds\n' + '> ' * 69
-                    + f'1 {line}\n> ')
+                    + f'1.01 {line}\n> ')
         self.execute(self.source, expected, commands)
 
     def test_load_error_keeps_source(self):
@@ -265,7 +265,7 @@ test_fail:
                 self.execute(self.source,
                              'FOCAL/RARS REPL. Enter HELP for commands.\n> > '
                              f'FOCAL/RARS error [E{code:02}]: {message}\n'
-                             '> 1 TYPE "KEEP",!\n> AFTER\n> ',
+                             '> 1.01 TYPE "KEEP",!\n> AFTER\n> ',
                              '1 TYPE "KEEP",!\nLOAD bad.focal\nLIST\nTYPE "AFTER",!\nQUIT\n',
                              {'bad.focal': content})
 
@@ -278,7 +278,7 @@ test_fail:
         seed = ''.join(f'li s{n}, {700+n}\n' for n in range(12))
         verify = ''.join(f'li t0, {700+n}\nbne s{n}, t0, test_fail\n' for n in range(12))
         body = (seed + 'la t0, focal_program\nsw t0, source_ptr, t1\ncall compile_program\n'
-                + error_is('0') + verify + 'li a0, 1\ncall set_pc_to_line\n'
+                + error_is('0') + verify + 'li a0, 101\ncall set_pc_to_line\n'
                 + error_is('0') + verify + 'call reset_runtime\nli a0, OP_ADD\ncall emit_word\n'
                 + 'call vm_run\n' + error_is('ERR_VM_UNDERFLOW') + verify)
         self.execute(self.harness(body), 'PASS\n')
@@ -306,14 +306,14 @@ test_fail:
                 commands += ''.join(f'{n}\n' for n in range(2, 61)) + 'LIST\nQUIT\n'
                 expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n' + '> ' * 61
                             + f'FOCAL/RARS error [E{code:02}]: {message}\n> AFTER\n'
-                            + '> ' * 60 + f'1 {statement}\n> ')
+                            + '> ' * 60 + f'1.01 {statement}\n> ')
                 self.execute(self.source, expected, commands)
 
     def test_runtime_error_does_not_rollback_variables(self):
         self.execute(self.source,
                      'FOCAL/RARS REPL. Enter HELP for commands.\n> > > '
                      'FOCAL/RARS error [E09]: variable/array bounds\n> 7.0\n'
-                     '> 1 SET A=7\n2 TYPE A(100),!\n> ',
+                     '> 1.01 SET A=7\n1.02 TYPE A(100),!\n> ',
                      '1 SET A=7\n2 TYPE A(100),!\nRUN\nTYPE A,!\nLIST\nQUIT\n')
 
 

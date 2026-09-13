@@ -15,11 +15,12 @@ SYNTAX = 'FOCAL/RARS error [E10]: invalid source\n'
 DEFERRED = 'FOCAL/RARS error [E13]: recognized statement not implemented yet\n'
 MISSING = 'FOCAL/RARS error [E08]: line not found\n'
 HELP = ('Commands:\n'
-        '  numbered line     add/replace a stored line; number only deletes\n'
+        '  group.line text   add/replace; number only deletes (1.1 = 1.10)\n'
         '  FOCAL statement   execute immediately; keywords ignore case\n'
         '  RUN               run stored program; preserve variables\n'
         '  G / GO / GOTO     FOCAL jump; no argument runs stored program\n'
         '  LIST              show stored program\n'
+        '  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n'
         '  LOAD <file>       load program; preserve variables\n'
         '  SAVE <file>       save stored program\n'
         '  ERASE             clear program, variables and runtime state\n'
@@ -27,8 +28,8 @@ HELP = ('Commands:\n'
         '  QUIT / Q          stop FOCAL execution; return to REPL\n'
         '  EXIT              exit interpreter/RARS\n'
         'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\n'
-        'Standalone DO/D RETURN/R WRITE/W: recognized; not implemented yet.\n'
-        'Expressions, integer line numbers and IF/FOR syntax remain legacy.\n')
+        'Standalone DO/D RETURN/R: recognized; not implemented yet.\n'
+        'Legacy integer aliases remain temporary; expressions and IF/FOR remain legacy.\n')
 
 
 class ReplTests(unittest.TestCase):
@@ -59,7 +60,7 @@ class ReplTests(unittest.TestCase):
 
     def test_run_list_and_stored_quit(self):
         self.session([('1 TYPE "Before",!', ''), ('2 Q', ''), ('3 TYPE "Never",!', ''),
-                      ('RUN', 'Before\n'), ('LIST', '1 TYPE "Before",!\n2 Q\n3 TYPE "Never",!\n'),
+                      ('RUN', 'Before\n'), ('LIST', '1.01 TYPE "Before",!\n1.02 Q\n1.03 TYPE "Never",!\n'),
                       ('TYPE "After",!', 'After\n')])
 
     def test_invalid_prefixes(self):
@@ -71,9 +72,13 @@ class ReplTests(unittest.TestCase):
                 self.session([(token, UNKNOWN), ('QUIT', ''), ('TYPE "Alive",!', 'Alive\n')])
 
     def test_return_and_do_and_write_are_recognized_not_run(self):
-        for token in ['RETURN', 'R', 'DO', 'D', 'WRITE', 'W']:
+        for token in ['RETURN', 'R', 'DO', 'D']:
             with self.subTest(token=token):
                 self.session([('1 TYPE "NOT RUN",!', ''), (token, DEFERRED), ('Q', '')])
+        # WRITE is implemented in stage 4: viewing source is not executing it.
+        for token in ['WRITE', 'W']:
+            with self.subTest(token=token):
+                self.session([('1 TYPE "NOT RUN",!', ''), (token, '1.01 TYPE "NOT RUN",!\n'), ('Q', '')])
 
     def test_goto_argument_is_not_environment_run(self):
         for token in ['G', 'GO', 'GOTO']:
@@ -87,7 +92,7 @@ class ReplTests(unittest.TestCase):
 
     def test_mixed_case_and_source_preservation(self):
         self.session([('1 tYpE "MiXeD Text",!', ''), ('2 qUiT', ''),
-                      ('rUn', 'MiXeD Text\n'), ('lIsT', '1 tYpE "MiXeD Text",!\n2 qUiT\n'),
+                      ('rUn', 'MiXeD Text\n'), ('lIsT', '1.01 tYpE "MiXeD Text",!\n1.02 qUiT\n'),
                       ('sEt a=5', ''), ('tYpE a,!', '5.0\n')])
 
     def test_help_and_mixed_case_exit(self):
@@ -102,7 +107,7 @@ class ReplTests(unittest.TestCase):
 
     def test_run_and_other_commands_preserve_variables(self):
         self.session([('S A=6', ''), ('1 TYPE A,!', ''), ('RUN', '6.0\n'),
-                      ('RUN', '6.0\n'), ('LIST', '1 TYPE A,!\n'),
+                      ('RUN', '6.0\n'), ('LIST', '1.01 TYPE A,!\n'),
                       ('sAvE state.focal', 'Saved\n'), ('lOaD state.focal', 'Loaded\n'),
                       ('T A,!', '6.0\n'), ('RUN', '6.0\n')])
 
@@ -120,22 +125,22 @@ class ReplTests(unittest.TestCase):
     def test_comments_preserve_text_and_do_not_execute_tail(self):
         self.session([('c TyPe "no"', ''), ('1 CoMmEnT arbitrary MiXeD text', ''),
                       ('2 T "yes",!', ''), ('RUN', 'yes\n'),
-                      ('LIST', '1 CoMmEnT arbitrary MiXeD text\n2 T "yes",!\n')])
+                      ('LIST', '1.01 CoMmEnT arbitrary MiXeD text\n1.02 T "yes",!\n')])
 
     def test_environment_requires_no_extra_arguments(self):
         for token in ['RUN', 'LIST', 'ERASE', 'HELP', 'EXIT']:
             with self.subTest(token=token):
-                self.session([('1 Q', ''), (token + ' extra', SYNTAX), ('LIST', '1 Q\n')])
+                self.session([('1 Q', ''), (token + ' extra', SYNTAX), ('LIST', '1.01 Q\n')])
 
     def test_load_uses_same_token_matching_and_preserves_case(self):
         self.session([('LOAD mixed.focal', 'Loaded\n'), ('RUN', 'FiLe\n'),
-                      ('LIST', '1 t "FiLe",!\n2 q\n')], files={'mixed.focal': '1 t "FiLe",!\n2 q\n'})
+                      ('LIST', '1.01 t "FiLe",!\n1.02 q\n')], files={'mixed.focal': '1 t "FiLe",!\n2 q\n'})
 
     def test_stored_prefixes_do_not_execute_as_statements(self):
         for token in ['SOMETHING', 'TYP', 'GOTOXYZ', 'FOOBAR', 'RUNNER']:
             with self.subTest(token=token):
                 self.session([('1 ' + token, ''), ('RUN', UNKNOWN),
-                              ('LIST', '1 ' + token + '\n'), ('T "Alive",!', 'Alive\n')])
+                              ('LIST', '1.01 ' + token + '\n'), ('T "Alive",!', 'Alive\n')])
 
     def test_nested_legacy_keyword_prefixes_are_rejected(self):
         for statement in ['IF 1 THENXYZ 2', 'IF 1 GOBLIN 2', 'FOR I=1,2 DOOM TYPE I']:
