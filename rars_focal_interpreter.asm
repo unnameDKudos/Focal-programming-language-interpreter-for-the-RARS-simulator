@@ -154,8 +154,12 @@ input_line:     .space 256
 input_line_end:
 file_name:      .space 256
 file_name_end:
+file_io_buf:    .space 256
+file_io_buf_end:
+file_space:     .byte 32
+file_newline:   .byte 10
     .align 2
-# LOAD safety rollback only; not an expanded user storage capacity.
+# LOAD transaction rollback only; not an expanded user storage capacity.
 repl_backup_count: .word 0
 repl_backup_numbers: .space 512
 repl_backup_texts: .space 16384
@@ -900,8 +904,14 @@ repl_extract_file_name_return:
     addi sp, sp, 16
     ret
 repl_load_file:
-    ENTER_FRAME (32)
+    ENTER_FRAME (64)
     sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    sw s5, 24(sp)
     la a0, input_line
     call repl_extract_file_name
     CHECK_ERROR (rlf_done)
@@ -911,45 +921,110 @@ repl_load_file:
     li a7, 1024
     ecall
     bltz a0, rlf_err
-    sw a0, 4(sp)
-    la a1, program_buf
-    li a2, 8192
-    li a7, 63
-    ecall
-    sw a0, 8(sp)
-    lw a0, 4(sp)
-    li a7, 57
-    ecall
-    lw t0, 8(sp)
-    bltz t0, rlf_err
-    li t1, 8192
-    bgeu t0, t1, rlf_full
-    la t1, program_buf
-    add t1, t1, t0
-    sb zero, 0(t1)
-    # Snapshot only after a bounded file read. Restore on any import error.
+    mv s0, a0
+    # The live storage is the transaction work area. The fixed backup makes
+    # every parse/read/capacity failure invisible to the previous program.
     call repl_snapshot
     call clear_storage_numbers
-    la a0, program_buf
-    call repl_import_program_buf
-    lw t0, error_code
-    bnez t0, rlf_restore
+    la s1, input_line
+    li s2, 0
+    li s5, 0
+rlf_read:
+    mv a0, s0
+    la a1, file_io_buf
+    li a2, 256
+    li a7, 63
+    ecall
+    bltz a0, rlf_read_error
+    beqz a0, rlf_eof
+    mv s3, a0
+    li s4, 0
+rlf_byte_loop:
+    bgeu s4, s3, rlf_read
+    la t0, file_io_buf
+    add t0, t0, s4
+    lbu t1, 0(t0)
+    addi s4, s4, 1
+    bnez s5, rlf_after_cr
+    beqz t1, rlf_nul_error
+    li t2, 13
+    beq t1, t2, rlf_got_cr
+    li t2, 10
+    beq t1, t2, rlf_line_end
+    li t2, 255
+    bgeu s2, t2, rlf_text_error
+    sb t1, 0(s1)
+    addi s1, s1, 1
+    addi s2, s2, 1
+    j rlf_byte_loop
+rlf_got_cr:
+    li s5, 1
+    j rlf_byte_loop
+rlf_after_cr:
+    li t2, 10
+    bne t1, t2, rlf_syntax_error
+    li s5, 0
+rlf_line_end:
+    mv a0, s2
+    call repl_load_store_line
+    CHECK_ERROR (rlf_restore)
+    la s1, input_line
+    li s2, 0
+    j rlf_byte_loop
+rlf_eof:
+    # A final line needs no terminator. A trailing CR is also a line ending.
+    mv a0, s2
+    call repl_load_store_line
+    CHECK_ERROR (rlf_restore)
+    mv a0, s0
+    li a7, 57
+    ecall
     la a0, repl_load_ok
     li a7, 4
     ecall
     j rlf_done
+rlf_read_error:
+    call error_file
+    j rlf_restore
+rlf_nul_error:
+rlf_syntax_error:
+    call error_syntax
+    j rlf_restore
+rlf_text_error:
+    call error_text
 rlf_restore:
+    mv a0, s0
+    li a7, 57
+    ecall
     call repl_restore
-    j rlf_done
-rlf_full:
-    call error_program
     j rlf_done
 rlf_err:
     call error_file
 rlf_done:
 repl_load_file_return:
     lw ra, 0(sp)
-    addi sp, sp, 32
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    lw s5, 24(sp)
+    addi sp, sp, 64
+    ret
+
+# Commit one complete physical file line through the Stage-4 parser/storage.
+# a0 is the byte count already assembled at input_line; blank lines are inert.
+repl_load_store_line:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    beqz a0, rlsl_done
+    la t0, input_line
+    add t0, t0, a0
+    sb zero, 0(t0)
+    call repl_store_line
+rlsl_done:
+    lw ra, 0(sp)
+    addi sp, sp, 16
     ret
 # Fixed-count copies over exactly the existing storage; no unchecked count.
 repl_snapshot:
@@ -976,48 +1051,121 @@ safety_near_13:
     addi t2, t2, -4
     j repl_copy_snapshot
 repl_save_file:
-    ENTER_FRAME (32)
+    ENTER_FRAME (48)
     sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
     la a0, input_line
     call repl_extract_file_name
     CHECK_ERROR (repl_save_file_return)
     lbu t0, 0(a0)
     beqz t0, rsf_err
-    call repl_build_program
-    CHECK_ERROR (repl_save_file_return)
-    la a0, program_buf
-    call string_length
-    CHECK_ERROR (repl_save_file_return)
-    sw a0, 8(sp)
     la a0, file_name
     li a1, 1
     li a7, 1024
     ecall
     bltz a0, rsf_err
-    sw a0, 4(sp)
-    mv a0, a0
-    la a1, program_buf
-    lw a2, 8(sp)
-    li a7, 64
-    ecall
-    lw t0, 8(sp)
-    bne a0, t0, rsf_close_err
-    lw a0, 4(sp)
+    mv s0, a0
+    li s1, 0
+rsf_loop:
+    mv a0, s1
+    li a1, 101
+    li a2, 9999
+    call find_next_slot
+    CHECK_ERROR (rsf_close)
+    bltz a0, rsf_success
+    mv s2, a0
+    mv s1, a1
+    mv a0, s2
+    call repl_text_addr
+    CHECK_ERROR (rsf_close)
+    mv s3, a0
+    call check_slot_text
+    CHECK_ERROR (rsf_close)
+    mv s4, a1
+    mv a0, s1
+    call format_line_number
+    CHECK_ERROR (rsf_close)
+    mv a2, a1
+    mv a1, a0
+    mv a0, s0
+    call write_fd_all
+    CHECK_ERROR (rsf_close)
+    mv a0, s0
+    la a1, file_space
+    li a2, 1
+    call write_fd_all
+    CHECK_ERROR (rsf_close)
+    mv a0, s0
+    mv a1, s3
+    mv a2, s4
+    call write_fd_all
+    CHECK_ERROR (rsf_close)
+    mv a0, s0
+    la a1, file_newline
+    li a2, 1
+    call write_fd_all
+    CHECK_ERROR (rsf_close)
+    j rsf_loop
+rsf_success:
+    mv a0, s0
     li a7, 57
     ecall
     la a0, repl_save_ok
     li a7, 4
     ecall
     j rsf_done
-rsf_close_err:
-    lw a0, 4(sp)
+rsf_close:
+    mv a0, s0
     li a7, 57
     ecall
+    j rsf_done
 rsf_err:
     call error_file
 rsf_done:
 repl_save_file_return:
     lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    addi sp, sp, 48
+    ret
+
+# Complete writes only. A zero, negative, or over-sized syscall result is I/O.
+# a0=fd, a1=buffer, a2=count.
+write_fd_all:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    mv s0, a0
+    mv s1, a1
+    mv s2, a2
+wfa_loop:
+    beqz s2, wfa_done
+    mv a0, s0
+    mv a1, s1
+    mv a2, s2
+    li a7, 64
+    ecall
+    blez a0, wfa_error
+    bgtu a0, s2, wfa_error
+    add s1, s1, a0
+    sub s2, s2, a0
+    j wfa_loop
+wfa_error:
+    call error_file
+wfa_done:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
     addi sp, sp, 32
     ret
 repl_import_program_buf:
@@ -3080,7 +3228,8 @@ error_number:
     j set_error
 
 # Format a validated canonical key into a fixed 8-byte scratch buffer.
-# g.ll is at most five bytes + NUL. Shared by RUN/SAVE builders and LIST/WRITE.
+# Returns a0=buffer and a1=byte length (4 or 5). Shared by RUN/SAVE builders
+# and LIST/WRITE.
 format_line_number:
     CHECK_ERROR (safety_return)
     li t0, 101
@@ -3092,8 +3241,10 @@ format_line_number:
     remu t2, a0, t0
     beqz t2, error_number
     la t3, number_text
+    li a1, 4
     li t0, 10
     bltu t1, t0, fln_units
+    li a1, 5
     divu t4, t1, t0
     addi t4, t4, 48
     sb t4, 0(t3)
@@ -3152,7 +3303,7 @@ fns_done:
     mv a1, t1
     ret
 
-# Check a physical slot's NUL before syscall PrintString may see its text.
+# Check a physical slot's NUL before output may see its text; return length in a1.
 check_slot_text:
     CHECK_ERROR (safety_return)
     la t0, repl_texts
@@ -3164,11 +3315,13 @@ check_slot_text:
     bnez t0, error_text
     mv t0, a0
     addi t1, a0, LINE_LEN
+    li a1, 0
 cst_scan:
     bgeu t0, t1, error_text
     lbu t2, 0(t0)
     beqz t2, safety_return
     addi t0, t0, 1
+    addi a1, a1, 1
     j cst_scan
 
 # LIST and VM WRITE share this streaming view, independent of program_buf.

@@ -258,7 +258,9 @@ test_fail:
         for content, code, message in [
             ('1 QUIT\n2 ' + 'x' * 128 + '\n', 7, 'text buffer bounds'),
             (''.join(f'{n} QUIT\n' for n in range(1, 130)), 8, 'line table/storage bounds'),
-            ('x' * 8192, 6, 'program buffer bounds'),
+            # Stage 5 streams files beyond 8191 bytes; this is now rejected
+            # because its single physical line cannot fit, not by file size.
+            ('x' * 8192, 7, 'text buffer bounds'),
             ('1 ' + 'x' * 256 + '\n', 7, 'text buffer bounds'),
         ]:
             with self.subTest(code=code, size=len(content)):
