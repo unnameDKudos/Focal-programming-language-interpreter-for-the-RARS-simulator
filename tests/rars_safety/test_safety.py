@@ -196,6 +196,97 @@ la t0, bytecode_buf
 sw t0, pc_ptr, t1
 call vm_run
 """ + error_is("ERR_ARRAY"),
+    "type_buffer_last_byte_and_overflow": """
+la t0, type_num_buf_end
+li t1, 85
+sb t1, 0(t0)
+addi a1, t0, -2
+li a0, 65
+call type_buf_append
+lw t0, error_code
+bnez t0, test_fail
+la t0, type_num_buf_end
+lbu t1, -2(t0)
+li t2, 65
+bne t1, t2, test_fail
+lbu t1, -1(t0)
+bnez t1, test_fail
+lbu t1, 0(t0)
+li t2, 85
+bne t1, t2, test_fail
+addi a1, t0, -1
+li a0, 66
+call type_buf_append
+""" + error_is("ERR_TEXT") + """
+la t0, type_num_buf_end
+lbu t1, -1(t0)
+bnez t1, test_fail
+lbu t1, 0(t0)
+li t2, 85
+bne t1, t2, test_fail
+""",
+    "format_opcode_missing_operand": """
+li a0, OP_SET_FORMAT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS"),
+    "format_opcode_invalid_state_is_atomic": """
+li t0, TYPE_FMT_FIXED
+sw t0, type_format_mode, t1
+li t0, 7
+sw t0, type_format_width, t1
+li t0, 2
+sw t0, type_format_precision, t1
+li a0, OP_SET_FORMAT
+call emit_word
+li a0, 99
+call emit_word
+li a0, 8
+call emit_word
+li a0, 3
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_SYNTAX") + """
+lw t0, type_format_mode
+li t1, TYPE_FMT_FIXED
+bne t0, t1, test_fail
+lw t0, type_format_width
+li t1, 7
+bne t0, t1, test_fail
+lw t0, type_format_precision
+li t1, 2
+bne t0, t1, test_fail
+""",
+    "corrupt_type_format_state": """
+li a0, TYPE_FMT_FIXED
+li a1, 256
+li a2, 0
+call validate_type_format
+lw t0, error_code
+bnez t0, test_fail
+li t0, TYPE_FMT_FIXED
+sw t0, type_format_mode, t1
+li t0, -1
+sw t0, type_format_width, t1
+sw zero, type_format_precision, t1
+fmv.w.x ft0, zero
+call type_print_ft0
+""" + error_is("ERR_SYNTAX"),
+    "print_float_stack_underflow": """
+li a0, OP_PRINT_F
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW"),
     "bad_absolute_jump": "li a0, OP_JUMP_ABS\ncall emit_word\nli a0, 1\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
     "procedural_stack_guard": "mv t0, sp\nsw t0, proc_stack_floor, t1\ncall compile_program\n" + error_is("ERR_PROC_STACK"),
 }

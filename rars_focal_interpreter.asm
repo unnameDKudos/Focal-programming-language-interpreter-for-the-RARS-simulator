@@ -113,6 +113,10 @@ safety_near_7:
 .eqv OP_PRINT_NL   66
 .eqv OP_READ_F     67
 .eqv OP_WRITE      68
+.eqv OP_SET_FORMAT 69
+.eqv TYPE_FMT_DEFAULT 0
+.eqv TYPE_FMT_EXP     1
+.eqv TYPE_FMT_FIXED   2
 .eqv MAX_LINES     128
 .eqv LINE_LEN      128
 .eqv SYMBOL_MAX    512
@@ -163,6 +167,11 @@ file_name:      .space 256
 file_name_end:
 file_io_buf:    .space 256
 file_io_buf_end:
+type_format_mode: .word TYPE_FMT_DEFAULT
+type_format_width: .word 0
+type_format_precision: .word 0
+type_num_buf:   .space 256
+type_num_buf_end:
 file_space:     .byte 32
 file_newline:   .byte 10
     .align 2
@@ -187,7 +196,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer line aliases and IF/FOR control flow remain compatibility paths.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer line aliases and IF/FOR control flow remain compatibility paths.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -288,6 +297,7 @@ msg_deferred: .asciz "FOCAL/RARS error [E13]: recognized statement not implement
 main:
     andi sp, sp, -16
     call init_safety
+    call reset_type_format
     la t0, repl_enabled
     lw t1, 0(t0)
     bnez t1, rars_repl
@@ -409,6 +419,7 @@ repl_list:
 repl_erase:
     call repl_clear_program
     call clear_variables
+    call reset_type_format
     call reset_runtime
     j repl_loop
 repl_load:
@@ -452,6 +463,12 @@ cv_loop:
     addi t0, t0, 4
     j cv_loop
 cv_done:
+    ret
+reset_type_format:
+    li t0, TYPE_FMT_DEFAULT
+    sw t0, type_format_mode, t1
+    sw zero, type_format_width, t1
+    sw zero, type_format_precision, t1
     ret
 reset_runtime:
     sw zero, error_code, t0
@@ -1715,79 +1732,199 @@ compile_set_return:
     addi sp, sp, 32
     ret
 compile_type:
-    ENTER_FRAME (16)
+    ENTER_FRAME (32)
     sw ra, 0(sp)
+    sw s0, 4(sp)
     call consume_type
     CHECK_ERROR (compile_type_return)
+    li s0, 0
 ct_loop:
     call skip_parse_spaces
     CHECK_ERROR (compile_type_return)
     call is_parse_statement_end
     CHECK_ERROR (compile_type_return)
-    bnez a0, ct_done
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_type_bad_source)
-    lbu t2, 0(t1)
-    li t3, 34
-    beq t2, t3, ct_string
-    li t3, 33
-    beq t2, t3, ct_newline
-    li t3, 44
-    beq t2, t3, ct_comma
+    bnez a0, compile_type_bad_source
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_type_bad_source)
+    lbu t1, 0(t0)
+    li t2, 34
+    beq t1, t2, ct_string
+    li t2, 33
+    beq t1, t2, ct_newline
+    li t2, 37
+    beq t1, t2, ct_format
+    li t2, 44
+    beq t1, t2, compile_type_bad_source
     call compile_expr
     CHECK_ERROR (compile_type_return)
     li a0, OP_PRINT_F
     call emit_word
     CHECK_ERROR (compile_type_return)
-    # Numeric/variable expressions in TYPE require an actual list/control or
-    # statement boundary. This prevents E3 and 1.2.3 becoming two operands.
-    call skip_parse_spaces
-    CHECK_ERROR (compile_type_return)
-    lw t0, parse_ptr
-    CHECK_PARSE (t0, compile_type_bad_source)
-    lbu t1, 0(t0)
-    beqz t1, ct_loop
-    li t2, 10
-    beq t1, t2, ct_loop
-    li t2, 13
-    beq t1, t2, ct_loop
-    li t2, 59
-    beq t1, t2, ct_loop
-    li t2, 44
-    beq t1, t2, ct_loop
-    li t2, 33
-    beq t1, t2, ct_loop
-    j compile_type_bad_source
+    j ct_item_done
 ct_string:
     call copy_string_to_pool
     CHECK_ERROR (compile_type_return)
-    sw a0, 4(sp)
+    sw a0, 8(sp)
     li a0, OP_PRINT_S
     call emit_word
     CHECK_ERROR (compile_type_return)
-    lw a0, 4(sp)
+    lw a0, 8(sp)
     call emit_word
     CHECK_ERROR (compile_type_return)
-    j ct_loop
+    j ct_item_done
 ct_newline:
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     li a0, OP_PRINT_NL
     call emit_word
     CHECK_ERROR (compile_type_return)
-    j ct_loop
-ct_comma:
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    j ct_item_done
+ct_format:
+    call compile_type_format
+    CHECK_ERROR (compile_type_return)
+ct_item_done:
+    li s0, 1
+    call skip_parse_spaces
+    CHECK_ERROR (compile_type_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_type_return)
+    bnez a0, ct_done
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_type_bad_source)
+    lbu t1, 0(t0)
+    li t2, 44
+    bne t1, t2, compile_type_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     j ct_loop
 ct_done:
+    beqz s0, compile_type_bad_source
     j compile_type_return
 compile_type_bad_source:
     call error_syntax
 compile_type_return:
     lw ra, 0(sp)
-    addi sp, sp, 16
+    lw s0, 4(sp)
+    addi sp, sp, 32
+    ret
+
+# TYPE format item: bare '%' selects exponential output; '%W' selects an
+# integer field; '%W.0d' selects a fixed field with one decimal precision digit.
+compile_type_format:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_type_format_bad)
+    lbu t1, 0(t0)
+    li t2, 37
+    bne t1, t2, compile_type_format_bad
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    CHECK_PARSE (t0, compile_type_format_bad)
+    lbu t1, 0(t0)
+    li t2, 48
+    bltu t1, t2, ctf_exp_boundary
+    li t2, 57
+    bgtu t1, t2, ctf_exp_boundary
+    li s0, 0
+    li s2, 0
+ctf_width_loop:
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_type_format_bad)
+    lbu t1, 0(t0)
+    li t2, 48
+    bltu t1, t2, ctf_width_done
+    li t2, 57
+    bgtu t1, t2, ctf_width_done
+    addi t3, t1, -48
+    # Checked positive signed-int32 accumulation. Field padding is streamed,
+    # so this representational limit is independent of type_num_buf capacity.
+    li t2, 214748364
+    bgtu s0, t2, compile_type_format_bad
+    bltu s0, t2, ctf_width_accumulate
+    li t2, 7
+    bgtu t3, t2, compile_type_format_bad
+ctf_width_accumulate:
+    li t2, 10
+    mul s0, s0, t2
+    add s0, s0, t3
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    addi s2, s2, 1
+    j ctf_width_loop
+ctf_width_done:
+    beqz s2, compile_type_format_bad
+    beqz s0, compile_type_format_bad
+    li s1, 0
+    li t2, 46
+    bne t1, t2, ctf_emit_fixed
+    addi t0, t0, 1
+    CHECK_PARSE (t0, compile_type_format_bad)
+    lbu t1, 0(t0)
+    li t2, 48
+    bne t1, t2, compile_type_format_bad
+    addi t0, t0, 1
+    CHECK_PARSE (t0, compile_type_format_bad)
+    lbu t1, 0(t0)
+    li t2, 48
+    bltu t1, t2, compile_type_format_bad
+    li t2, 57
+    bgtu t1, t2, compile_type_format_bad
+    addi s1, t1, -48
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+ctf_emit_fixed:
+    li a0, OP_SET_FORMAT
+    call emit_word
+    CHECK_ERROR (compile_type_format_return)
+    li a0, TYPE_FMT_FIXED
+    call emit_word
+    CHECK_ERROR (compile_type_format_return)
+    mv a0, s0
+    call emit_word
+    CHECK_ERROR (compile_type_format_return)
+    mv a0, s1
+    call emit_word
+    j compile_type_format_return
+ctf_exp_boundary:
+    # Whitespace or an item/statement boundary terminates the bare '%' token.
+    beqz t1, ctf_emit_exp
+    li t2, 9
+    beq t1, t2, ctf_emit_exp
+    li t2, 10
+    beq t1, t2, ctf_emit_exp
+    li t2, 13
+    beq t1, t2, ctf_emit_exp
+    li t2, 32
+    beq t1, t2, ctf_emit_exp
+    li t2, 44
+    beq t1, t2, ctf_emit_exp
+    li t2, 59
+    bne t1, t2, compile_type_format_bad
+ctf_emit_exp:
+    li a0, OP_SET_FORMAT
+    call emit_word
+    CHECK_ERROR (compile_type_format_return)
+    li a0, TYPE_FMT_EXP
+    call emit_word
+    CHECK_ERROR (compile_type_format_return)
+    li a0, 0
+    call emit_word
+    CHECK_ERROR (compile_type_format_return)
+    li a0, 0
+    call emit_word
+    j compile_type_format_return
+compile_type_format_bad:
+    call error_syntax
+compile_type_format_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 32
     ret
 compile_ask:
     ENTER_FRAME (16)
@@ -2703,6 +2840,10 @@ vm_loop:
     bne s1, t1, vm_not_write
     j vm_write
 vm_not_write:
+    li t1, OP_SET_FORMAT
+    bne s1, t1, vm_not_format
+    j vm_set_format
+vm_not_format:
     li t1, OP_PUSH_F
     beq s1, t1, vm_push_f
     li t1, OP_PUSH_BITS
@@ -3148,9 +3289,8 @@ vm_print_s:
 vm_print_f:
     call vm_pop_ft0
     CHECK_ERROR (vm_run_return)
-    fmv.s fa0, ft0
-    li a7, 2
-    ecall
+    call type_print_ft0
+    CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_print_nl:
     li a0, 10
@@ -3175,6 +3315,27 @@ vm_write:
     call print_source
     CHECK_ERROR (vm_run_return)
     j vm_loop
+vm_set_format:
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv s2, a0
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    sw a0, 20(sp)
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    sw a0, 24(sp)
+    mv a0, s2
+    lw a1, 20(sp)
+    lw a2, 24(sp)
+    call validate_type_format
+    CHECK_ERROR (vm_run_return)
+    sw s2, type_format_mode, t0
+    lw t1, 20(sp)
+    sw t1, type_format_width, t0
+    lw t1, 24(sp)
+    sw t1, type_format_precision, t0
+    j vm_loop
 vm_halt:
 vm_run_return:
     lw s0, 4(sp)
@@ -3182,6 +3343,308 @@ vm_run_return:
     lw s2, 12(sp)
     lw ra, 0(sp)
     addi sp, sp, 32
+    ret
+
+# Runtime validation is shared by OP_SET_FORMAT and every numeric print, so a
+# corrupted persistent state cannot select an unsafe formatter path.
+validate_type_format:
+    CHECK_ERROR (safety_return)
+    li t0, TYPE_FMT_DEFAULT
+    beq a0, t0, vtf_plain
+    li t0, TYPE_FMT_EXP
+    beq a0, t0, vtf_plain
+    li t0, TYPE_FMT_FIXED
+    bne a0, t0, vtf_bad
+    blez a1, vtf_bad
+    li t0, 9
+    bgtu a2, t0, vtf_bad
+    ret
+vtf_plain:
+    bnez a1, vtf_bad
+    bnez a2, vtf_bad
+    ret
+vtf_bad:
+    j error_syntax
+
+type_validate_finite_ft0:
+    CHECK_ERROR (safety_return)
+    fmv.x.w t0, ft0
+    slli t1, t0, 1
+    srli t1, t1, 1
+    srli t1, t1, 23
+    li t2, 255
+    beq t1, t2, tvf_bad
+    ret
+tvf_bad:
+    j error_math
+
+# Numeric TYPE dispatch. Default deliberately remains RARS PrintFloat for
+# compatibility; explicit formats are implemented below inside the target.
+type_print_ft0:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    lw a0, type_format_mode
+    lw a1, type_format_width
+    lw a2, type_format_precision
+    call validate_type_format
+    CHECK_ERROR (type_print_ft0_return)
+    call type_validate_finite_ft0
+    CHECK_ERROR (type_print_ft0_return)
+    lw t0, type_format_mode
+    li t1, TYPE_FMT_EXP
+    beq t0, t1, tpf_exp
+    li t1, TYPE_FMT_FIXED
+    beq t0, t1, tpf_fixed
+    fmv.s fa0, ft0
+    li a7, 2
+    ecall
+    j type_print_ft0_return
+tpf_exp:
+    call type_print_exp_ft0
+    j type_print_ft0_return
+tpf_fixed:
+    call type_print_fixed_ft0
+type_print_ft0_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# Exponential representation is normalized to [1,10) and printed as
+# <RARS-positive-mantissa>E<signed-decimal-exponent>.
+type_print_exp_ft0:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    call type_validate_finite_ft0
+    CHECK_ERROR (type_print_exp_return)
+    fmv.x.w t0, ft0
+    srli s0, t0, 31
+    fsgnjx.s ft0, ft0, ft0
+    la t0, zero_f
+    flw ft1, 0(t0)
+    feq.s t0, ft0, ft1
+    beqz t0, tpe_nonzero
+    li s0, 0
+    li s1, 0
+    j tpe_emit
+tpe_nonzero:
+    li s1, 0
+    la t0, ten_f
+    flw ft1, 0(t0)
+tpe_high:
+    flt.s t0, ft0, ft1
+    bnez t0, tpe_low_setup
+    fdiv.s ft0, ft0, ft1
+    addi s1, s1, 1
+    j tpe_high
+tpe_low_setup:
+    la t0, one_f
+    flw ft2, 0(t0)
+tpe_low:
+    flt.s t0, ft0, ft2
+    beqz t0, tpe_emit
+    fmul.s ft0, ft0, ft1
+    addi s1, s1, -1
+    j tpe_low
+tpe_emit:
+    beqz s0, tpe_mantissa
+    li a0, 45
+    li a7, 11
+    ecall
+tpe_mantissa:
+    fmv.s fa0, ft0
+    li a7, 2
+    ecall
+    li a0, 69
+    li a7, 11
+    ecall
+    bltz s1, tpe_minus
+    li a0, 43
+    li a7, 11
+    ecall
+    mv a0, s1
+    j tpe_exponent
+tpe_minus:
+    li a0, 45
+    li a7, 11
+    ecall
+    neg a0, s1
+tpe_exponent:
+    li a7, 1
+    ecall
+type_print_exp_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    addi sp, sp, 32
+    ret
+
+# a0=byte, a1=current pointer; returns advanced a1. One byte is always
+# reserved for NUL, and no byte is written when the preflight fails.
+type_buf_append:
+    CHECK_ERROR (safety_return)
+    la t0, type_num_buf
+    bltu a1, t0, tba_bad
+    la t0, type_num_buf_end
+    addi t0, t0, -1
+    bgeu a1, t0, tba_bad
+    sb a0, 0(a1)
+    addi a1, a1, 1
+    sb zero, 0(a1)
+    ret
+tba_bad:
+    j error_text
+
+# Explicit fixed formatter. Decimal rounding is half away from zero. Scaling
+# that cannot remain a safe signed integer uses the permitted exponential
+# fallback; field width is a minimum and never truncates a wider value.
+type_print_fixed_ft0:
+    ENTER_FRAME (64)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    sw s5, 24(sp)
+    lw s0, type_format_width
+    lw s1, type_format_precision
+    fmv.x.w t0, ft0
+    sw t0, 28(sp)
+    srli s5, t0, 31
+    fsgnjx.s ft0, ft0, ft0
+    la t0, zero_f
+    flw ft1, 0(t0)
+    feq.s t0, ft0, ft1
+    beqz t0, tpx_scale_setup
+    li s5, 0
+tpx_scale_setup:
+    la t0, one_f
+    flw ft1, 0(t0)
+    la t0, ten_f
+    flw ft2, 0(t0)
+    li t0, 0
+tpx_scale_loop:
+    bgeu t0, s1, tpx_scaled
+    fmul.s ft1, ft1, ft2
+    addi t0, t0, 1
+    j tpx_scale_loop
+tpx_scaled:
+    fmul.s ft2, ft0, ft1
+    la t0, half_f
+    flw ft3, 0(t0)
+    fadd.s ft2, ft2, ft3
+    fmv.x.w t0, ft2
+    slli t1, t0, 1
+    srli t1, t1, 1
+    srli t1, t1, 23
+    li t2, 255
+    beq t1, t2, tpx_fallback
+    la t0, index_upper_f
+    flw ft3, 0(t0)
+    flt.s t0, ft2, ft3
+    beqz t0, tpx_fallback
+    fcvt.w.s s2, ft2, rtz
+    mv t0, s2
+    li t1, 1
+    beqz t0, tpx_digit_count_done
+    li t1, 0
+tpx_digit_count:
+    addi t1, t1, 1
+    li t2, 10
+    divu t0, t0, t2
+    bnez t0, tpx_digit_count
+tpx_digit_count_done:
+    addi t2, s1, 1
+    bgeu t1, t2, tpx_total_ready
+    mv t1, t2
+tpx_total_ready:
+    mv s3, t1
+    add t2, s3, s5
+    beqz s1, tpx_length_ready
+    addi t2, t2, 1
+tpx_length_ready:
+    li t3, 255
+    bgtu t2, t3, tpx_fallback
+    la s4, type_num_buf
+    sb zero, 0(s4)
+    beqz s5, tpx_divisor
+    li a0, 45
+    mv a1, s4
+    call type_buf_append
+    CHECK_ERROR (type_print_fixed_return)
+    mv s4, a1
+tpx_divisor:
+    li t0, 1
+    addi t1, s3, -1
+    mv t2, t1
+tpx_divisor_loop:
+    beqz t2, tpx_digits_begin
+    li t3, 10
+    mul t0, t0, t3
+    addi t2, t2, -1
+    j tpx_divisor_loop
+tpx_digits_begin:
+    sw t0, 32(sp)
+    sw t1, 36(sp)
+tpx_digits_loop:
+    lw t1, 36(sp)
+    bltz t1, tpx_padding
+    beqz s1, tpx_emit_digit
+    addi t2, s1, -1
+    bne t1, t2, tpx_emit_digit
+    li a0, 46
+    mv a1, s4
+    call type_buf_append
+    CHECK_ERROR (type_print_fixed_return)
+    mv s4, a1
+tpx_emit_digit:
+    lw t0, 32(sp)
+    divu t1, s2, t0
+    remu s2, s2, t0
+    addi a0, t1, 48
+    mv a1, s4
+    call type_buf_append
+    CHECK_ERROR (type_print_fixed_return)
+    mv s4, a1
+    lw t0, 32(sp)
+    li t1, 10
+    divu t0, t0, t1
+    sw t0, 32(sp)
+    lw t1, 36(sp)
+    addi t1, t1, -1
+    sw t1, 36(sp)
+    j tpx_digits_loop
+tpx_padding:
+    la t0, type_num_buf
+    sub t0, s4, t0
+    sub s3, s0, t0
+    blez s3, tpx_print
+tpx_pad_loop:
+    li a0, 32
+    li a7, 11
+    ecall
+    addi s3, s3, -1
+    bnez s3, tpx_pad_loop
+tpx_print:
+    la a0, type_num_buf
+    li a7, 4
+    ecall
+    j type_print_fixed_return
+tpx_fallback:
+    lw t0, 28(sp)
+    fmv.w.x ft0, t0
+    call type_print_exp_ft0
+type_print_fixed_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    lw s5, 24(sp)
+    addi sp, sp, 64
     ret
 # fetch/patch/jump share the actually emitted interval [bytecode_buf, bc_ptr).
 fetch_word:

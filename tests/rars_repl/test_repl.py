@@ -28,6 +28,7 @@ HELP = ('Commands:\n'
         '  QUIT / Q          stop FOCAL execution; return to REPL\n'
         '  EXIT              exit interpreter/RARS\n'
         'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\n'
+        'TYPE formats: % exponential; %W integer field; %W.0d fixed field.\n'
         'Standalone DO/D RETURN/R: recognized; not implemented yet.\n'
         'Legacy integer line aliases and IF/FOR control flow remain compatibility paths.\n')
 
