@@ -58,6 +58,7 @@ safety_near_7:
 .end_macro
 .eqv ERR_DEFERRED 13
 .eqv ERR_NUMBER 14
+.eqv ERR_MATH 15
 .eqv TK_SET 1
 .eqv TK_TYPE 2
 .eqv TK_ASK 3
@@ -84,17 +85,23 @@ safety_near_7:
 .eqv OP_STORE_V    3
 .eqv OP_PUSH_ARR   4
 .eqv OP_STORE_ARR  5
+.eqv OP_PUSH_BITS  6
 .eqv OP_ADD        16
 .eqv OP_SUB        17
 .eqv OP_MUL        18
 .eqv OP_DIV        19
 .eqv OP_NEG        20
+.eqv OP_POW        21
+.eqv OP_ABS        22
+.eqv OP_SQRT       23
 .eqv OP_EQ         24
 .eqv OP_NE         25
 .eqv OP_LT         26
 .eqv OP_LE         27
 .eqv OP_GT         28
 .eqv OP_GE         29
+.eqv OP_TRUNC      30
+.eqv OP_SGN        31
 .eqv OP_JUMP       48
 .eqv OP_JUMP_Z     49
 .eqv OP_JUMP_NZ    50
@@ -166,6 +173,9 @@ repl_backup_texts: .space 16384
 repl_backup_end:
 zero_f:         .float 0.0
 one_f:          .float 1.0
+neg_one_f:      .float -1.0
+ten_f:          .float 10.0
+tenth_f:        .float 0.1
 err_unknown:    .asciz "FOCAL/RARS error [E10]: unknown statement\n"
 err_line:       .asciz "FOCAL/RARS error [E08]: line not found\n"
 repl_banner:    .asciz "FOCAL/RARS REPL. Enter HELP for commands.\n"
@@ -174,7 +184,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer aliases remain temporary; expressions and IF/FOR remain legacy.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer aliases remain temporary; identifiers and IF/FOR remain legacy.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -187,6 +197,7 @@ msg_array: .asciz "FOCAL/RARS error [E09]: variable/array bounds\n"
 msg_syntax: .asciz "FOCAL/RARS error [E10]: invalid source\n"
 msg_proc_stack: .asciz "FOCAL/RARS error [E11]: procedural stack limit\n"
 msg_file: .asciz "FOCAL/RARS error [E12]: file I/O\n"
+msg_math: .asciz "FOCAL/RARS error [E15]: invalid arithmetic operation\n"
 # Immutable keyword table; input bytes are compared, never normalized in place.
     .align 2
 keyword_table:
@@ -223,6 +234,17 @@ keyword_table:
     .word kw_HELP, TK_HELP
     .word kw_EXIT, TK_EXIT
     .word 0, 0
+    .align 2
+function_table:
+    .word fn_FABS, OP_ABS
+    .word fn_FSQT, OP_SQRT
+    .word fn_FITR, OP_TRUNC
+    .word fn_FSGN, OP_SGN
+    .word 0, 0
+fn_FABS: .asciz "FABS"
+fn_FSQT: .asciz "FSQT"
+fn_FITR: .asciz "FITR"
+fn_FSGN: .asciz "FSGN"
 kw_SET: .asciz "SET"
 kw_S: .asciz "S"
 kw_TYPE: .asciz "TYPE"
@@ -1714,7 +1736,25 @@ ct_loop:
     li a0, OP_PRINT_F
     call emit_word
     CHECK_ERROR (compile_type_return)
-    j ct_loop
+    # Numeric/variable expressions in TYPE require an actual list/control or
+    # statement boundary. This prevents E3 and 1.2.3 becoming two operands.
+    call skip_parse_spaces
+    CHECK_ERROR (compile_type_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_type_bad_source)
+    lbu t1, 0(t0)
+    beqz t1, ct_loop
+    li t2, 10
+    beq t1, t2, ct_loop
+    li t2, 13
+    beq t1, t2, ct_loop
+    li t2, 59
+    beq t1, t2, ct_loop
+    li t2, 44
+    beq t1, t2, ct_loop
+    li t2, 33
+    beq t1, t2, ct_loop
+    j compile_type_bad_source
 ct_string:
     call copy_string_to_pool
     CHECK_ERROR (compile_type_return)
@@ -2008,6 +2048,8 @@ compile_for_return:
     lw ra, 0(sp)
     addi sp, sp, 32
     ret
+# Normative expression path. Comparisons remain only for the existing legacy
+# IF/FOR callers; arithmetic levels below implement the v1.2 precedence.
 compile_expr:
     ENTER_FRAME (16)
     sw ra, 0(sp)
@@ -2015,81 +2057,73 @@ compile_expr:
     CHECK_ERROR (compile_expr_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_expr_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_expr_bad_source)
-    lbu t2, 0(t1)
-    li t3, 61
-    beq t2, t3, ce_eq
-    li t3, 60
-    beq t2, t3, ce_lt_family
-    li t3, 62
-    beq t2, t3, ce_gt_family
-    j ce_done
-ce_eq:
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_expr_bad_source)
+    lbu t1, 0(t0)
+    li t2, 61
+    beq t1, t2, cexpr_eq
+    li t2, 60
+    beq t1, t2, cexpr_lt
+    li t2, 62
+    beq t1, t2, cexpr_gt
+    j compile_expr_return
+cexpr_eq:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     call compile_additive
     CHECK_ERROR (compile_expr_return)
     li a0, OP_EQ
     call emit_word
-    CHECK_ERROR (compile_expr_return)
-    j ce_done
-ce_lt_family:
-    addi t1, t1, 1
-    CHECK_PARSE (t1, compile_expr_bad_source)
-    lbu t2, 0(t1)
-    li t3, 61
-    beq t2, t3, ce_le
-    li t3, 62
-    beq t2, t3, ce_ne
-    sw t1, 0(t0)
+    j compile_expr_return
+cexpr_lt:
+    addi t0, t0, 1
+    CHECK_PARSE (t0, compile_expr_bad_source)
+    lbu t1, 0(t0)
+    li t2, 61
+    beq t1, t2, cexpr_le
+    li t2, 62
+    beq t1, t2, cexpr_ne
+    sw t0, parse_ptr, t1
     call compile_additive
     CHECK_ERROR (compile_expr_return)
     li a0, OP_LT
     call emit_word
-    CHECK_ERROR (compile_expr_return)
-    j ce_done
-ce_le:
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    j compile_expr_return
+cexpr_le:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     call compile_additive
     CHECK_ERROR (compile_expr_return)
     li a0, OP_LE
     call emit_word
-    CHECK_ERROR (compile_expr_return)
-    j ce_done
-ce_ne:
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    j compile_expr_return
+cexpr_ne:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     call compile_additive
     CHECK_ERROR (compile_expr_return)
     li a0, OP_NE
     call emit_word
-    CHECK_ERROR (compile_expr_return)
-    j ce_done
-ce_gt_family:
-    addi t1, t1, 1
-    CHECK_PARSE (t1, compile_expr_bad_source)
-    lbu t2, 0(t1)
-    li t3, 61
-    beq t2, t3, ce_ge
-    sw t1, 0(t0)
+    j compile_expr_return
+cexpr_gt:
+    addi t0, t0, 1
+    CHECK_PARSE (t0, compile_expr_bad_source)
+    lbu t1, 0(t0)
+    li t2, 61
+    beq t1, t2, cexpr_ge
+    sw t0, parse_ptr, t1
     call compile_additive
     CHECK_ERROR (compile_expr_return)
     li a0, OP_GT
     call emit_word
-    CHECK_ERROR (compile_expr_return)
-    j ce_done
-ce_ge:
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    j compile_expr_return
+cexpr_ge:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     call compile_additive
     CHECK_ERROR (compile_expr_return)
     li a0, OP_GE
     call emit_word
-    CHECK_ERROR (compile_expr_return)
-ce_done:
     j compile_expr_return
 compile_expr_bad_source:
     call error_syntax
@@ -2097,175 +2131,458 @@ compile_expr_return:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
+
+# Lowest arithmetic level. A unary sign is allowed only at the beginning of a
+# complete expression/group/function argument, never after a binary + or -.
 compile_additive:
     ENTER_FRAME (16)
     sw ra, 0(sp)
-    call compile_term
+    li a0, 1
+    call compile_division
     CHECK_ERROR (compile_additive_return)
-ca_loop:
+cadd_loop:
     call skip_parse_spaces
     CHECK_ERROR (compile_additive_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_additive_bad_source)
-    lbu t2, 0(t1)
-    li t3, 43
-    beq t2, t3, ca_plus
-    li t3, 45
-    beq t2, t3, ca_minus
-    j ca_done
-ca_plus:
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    call compile_term
-    CHECK_ERROR (compile_additive_return)
-    li a0, OP_ADD
-    call emit_word
-    CHECK_ERROR (compile_additive_return)
-    j ca_loop
-ca_minus:
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    call compile_term
-    CHECK_ERROR (compile_additive_return)
-    li a0, OP_SUB
-    call emit_word
-    CHECK_ERROR (compile_additive_return)
-    j ca_loop
-ca_done:
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_additive_bad_source)
+    lbu t1, 0(t0)
+    li t2, 43
+    beq t1, t2, cadd_plus
+    li t2, 45
+    beq t1, t2, cadd_minus
     j compile_additive_return
+cadd_plus:
+    li t3, OP_ADD
+    j cadd_rhs
+cadd_minus:
+    li t3, OP_SUB
+cadd_rhs:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    sw t3, 4(sp)
+    li a0, 0
+    call compile_division
+    CHECK_ERROR (compile_additive_return)
+    lw a0, 4(sp)
+    call emit_word
+    CHECK_ERROR (compile_additive_return)
+    j cadd_loop
 compile_additive_bad_source:
     call error_syntax
 compile_additive_return:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
-compile_term:
+
+# Division is deliberately below multiplication: 8/2*2 means 8/(2*2).
+# a0 says whether the first factor may carry one unary sign.
+compile_division:
     ENTER_FRAME (16)
     sw ra, 0(sp)
-    call compile_factor
-    CHECK_ERROR (compile_term_return)
-cterm_loop:
+    sw s0, 4(sp)
+    mv s0, a0
+    mv a0, s0
+    call compile_multiplication
+    CHECK_ERROR (compile_division_return)
+cdiv_loop:
     call skip_parse_spaces
-    CHECK_ERROR (compile_term_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_term_bad_source)
-    lbu t2, 0(t1)
-    li t3, 42
-    beq t2, t3, cterm_mul
-    li t3, 47
-    beq t2, t3, cterm_div
-    j cterm_done
-cterm_mul:
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    call compile_factor
-    CHECK_ERROR (compile_term_return)
-    li a0, OP_MUL
-    call emit_word
-    CHECK_ERROR (compile_term_return)
-    j cterm_loop
-cterm_div:
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    call compile_factor
-    CHECK_ERROR (compile_term_return)
+    CHECK_ERROR (compile_division_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_division_bad_source)
+    lbu t1, 0(t0)
+    li t2, 47
+    bne t1, t2, compile_division_return
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    li a0, 0
+    call compile_multiplication
+    CHECK_ERROR (compile_division_return)
     li a0, OP_DIV
     call emit_word
-    CHECK_ERROR (compile_term_return)
-    j cterm_loop
-cterm_done:
-    j compile_term_return
-compile_term_bad_source:
+    CHECK_ERROR (compile_division_return)
+    j cdiv_loop
+compile_division_bad_source:
     call error_syntax
-compile_term_return:
+compile_division_return:
     lw ra, 0(sp)
+    lw s0, 4(sp)
     addi sp, sp, 16
     ret
-compile_factor:
+
+# a0 says whether the first power may carry one unary sign. Operands following
+# '*' are unsigned unless explicitly grouped.
+compile_multiplication:
     ENTER_FRAME (16)
     sw ra, 0(sp)
+    beqz a0, cmul_first_power
+    call compile_unary
+    j cmul_first_done
+cmul_first_power:
+    call compile_power
+cmul_first_done:
+    CHECK_ERROR (compile_multiplication_return)
+cmul_loop:
     call skip_parse_spaces
-    CHECK_ERROR (compile_factor_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_factor_bad_source)
-    lbu t2, 0(t1)
-    li t3, 45
-    beq t2, t3, cf_neg
-    li t3, 40
-    beq t2, t3, cf_paren
-    li t3, 48
-    blt t2, t3, cf_var
-    li t3, 57
-    ble t2, t3, cf_number
-    j cf_var
-cf_neg:
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    call compile_factor
-    CHECK_ERROR (compile_factor_return)
-    li a0, OP_NEG
+    CHECK_ERROR (compile_multiplication_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_multiplication_bad_source)
+    lbu t1, 0(t0)
+    li t2, 42
+    bne t1, t2, compile_multiplication_return
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call compile_power
+    CHECK_ERROR (compile_multiplication_return)
+    li a0, OP_MUL
     call emit_word
-    CHECK_ERROR (compile_factor_return)
-    j cf_done
-cf_paren:
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    call compile_expr
-    CHECK_ERROR (compile_factor_return)
-    call skip_parse_spaces
-    CHECK_ERROR (compile_factor_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, compile_factor_bad_source)
-    CHECK_PARSE (t1, compile_factor_bad_source)
-    lbu t2, 0(t1)
-    li t3, 41
-    bne t2, t3, compile_factor_bad_source
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    j cf_done
-cf_number:
-    call parse_int
-    CHECK_ERROR (compile_factor_return)
-    sw a0, 4(sp)
-    li a0, OP_PUSH_F
-    call emit_word
-    CHECK_ERROR (compile_factor_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_factor_return)
-    j cf_done
-cf_var:
-    call parse_variable_ref
-    CHECK_ERROR (compile_factor_return)
-    beqz a1, cf_scalar
-    sw a0, 4(sp)
-    li a0, OP_PUSH_ARR
-    call emit_word
-    CHECK_ERROR (compile_factor_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_factor_return)
-    j cf_done
-cf_scalar:
-    sw a0, 4(sp)
-    li a0, OP_PUSH_V
-    call emit_word
-    CHECK_ERROR (compile_factor_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_factor_return)
-cf_done:
-    j compile_factor_return
-compile_factor_bad_source:
+    CHECK_ERROR (compile_multiplication_return)
+    j cmul_loop
+compile_multiplication_bad_source:
     call error_syntax
-compile_factor_return:
+compile_multiplication_return:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
+
+# Exactly one optional sign. Power binds inside it, hence -A^I == -(A^I).
+compile_unary:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    sw zero, 4(sp)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_unary_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_unary_bad_source)
+    lbu t1, 0(t0)
+    li t2, 43
+    beq t1, t2, cunary_plus
+    li t2, 45
+    bne t1, t2, cunary_operand
+    li t3, 1
+    sw t3, 4(sp)
+cunary_plus:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+cunary_operand:
+    call compile_power
+    CHECK_ERROR (compile_unary_return)
+    lw t0, 4(sp)
+    beqz t0, compile_unary_return
+    li a0, OP_NEG
+    call emit_word
+    j compile_unary_return
+compile_unary_bad_source:
+    call error_syntax
+compile_unary_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# Right-associative integer power. Its RHS may have one unary sign so 2^-2 is
+# valid, while other binary operators still reject an ungrouped sign.
+compile_power:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    call compile_primary
+    CHECK_ERROR (compile_power_return)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_power_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_power_bad_source)
+    lbu t1, 0(t0)
+    li t2, 94
+    bne t1, t2, compile_power_return
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call compile_unary
+    CHECK_ERROR (compile_power_return)
+    li a0, OP_POW
+    call emit_word
+    j compile_power_return
+compile_power_bad_source:
+    call error_syntax
+compile_power_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# Primary: binary32 literal, variable, grouping, or one normative F-function.
+compile_primary:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_primary_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_primary_bad_source)
+    lbu t1, 0(t0)
+    li t2, 40
+    beq t1, t2, cprimary_paren
+    li t2, 91
+    beq t1, t2, cprimary_square
+    li t2, 60
+    beq t1, t2, cprimary_angle
+    li t2, 46
+    beq t1, t2, cprimary_number
+    li t2, 48
+    bltu t1, t2, cprimary_name
+    li t2, 57
+    bleu t1, t2, cprimary_number
+cprimary_name:
+    call read_function
+    CHECK_ERROR (compile_primary_return)
+    beqz a0, cprimary_variable
+    mv s1, a0
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_primary_bad_source)
+    lbu t1, 0(t0)
+    li t2, 40
+    beq t1, t2, cprimary_function_paren
+    li t2, 91
+    beq t1, t2, cprimary_function_square
+    li t2, 60
+    bne t1, t2, compile_primary_bad_source
+    li s0, 62
+    j cprimary_open
+cprimary_function_paren:
+    li s0, 41
+    j cprimary_open
+cprimary_function_square:
+    li s0, 93
+    j cprimary_open
+cprimary_paren:
+    li s0, 41
+    li s1, 0
+    j cprimary_open
+cprimary_square:
+    li s0, 93
+    li s1, 0
+    j cprimary_open
+cprimary_angle:
+    li s0, 62
+    li s1, 0
+cprimary_open:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call compile_additive
+    CHECK_ERROR (compile_primary_return)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_primary_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_primary_bad_source)
+    lbu t1, 0(t0)
+    bne t1, s0, compile_primary_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    beqz s1, compile_primary_return
+    mv a0, s1
+    call emit_word
+    j compile_primary_return
+cprimary_number:
+    call parse_float_literal
+    CHECK_ERROR (compile_primary_return)
+    mv s2, a0
+    li a0, OP_PUSH_BITS
+    call emit_word
+    CHECK_ERROR (compile_primary_return)
+    mv a0, s2
+    call emit_word
+    j compile_primary_return
+cprimary_variable:
+    call parse_variable_ref
+    CHECK_ERROR (compile_primary_return)
+    mv s2, a0
+    beqz a1, cprimary_scalar
+    li a0, OP_PUSH_ARR
+    call emit_word
+    CHECK_ERROR (compile_primary_return)
+    mv a0, s2
+    call emit_word
+    j compile_primary_return
+cprimary_scalar:
+    li a0, OP_PUSH_V
+    call emit_word
+    CHECK_ERROR (compile_primary_return)
+    mv a0, s2
+    call emit_word
+    j compile_primary_return
+compile_primary_bad_source:
+    call error_syntax
+compile_primary_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 32
+    ret
+
+# Case-insensitive exact match for FABS/FSQT/FITR/FSGN. On success parse_ptr
+# points at the opening bracket and a0 is the function opcode; otherwise zero.
+read_function:
+    CHECK_ERROR (safety_return)
+    la a2, function_table
+rf_entry:
+    lw a4, 0(a2)
+    beqz a4, rf_none
+    lw a5, parse_ptr
+rf_compare:
+    lbu t2, 0(a4)
+    beqz t2, rf_name_end
+    CHECK_PARSE (a5, rf_none)
+    lbu t3, 0(a5)
+    li t4, 97
+    bltu t3, t4, rf_folded
+    li t4, 122
+    bgtu t3, t4, rf_folded
+    addi t3, t3, -32
+rf_folded:
+    bne t2, t3, rf_next
+    addi a4, a4, 1
+    addi a5, a5, 1
+    j rf_compare
+rf_name_end:
+    CHECK_PARSE (a5, rf_none)
+rf_skip_spaces:
+    lbu t3, 0(a5)
+    li t4, 32
+    beq t3, t4, rf_space
+    li t4, 9
+    bne t3, t4, rf_bracket
+rf_space:
+    addi a5, a5, 1
+    CHECK_PARSE (a5, rf_none)
+    j rf_skip_spaces
+rf_bracket:
+    li t4, 40
+    beq t3, t4, rf_found
+    li t4, 91
+    beq t3, t4, rf_found
+    li t4, 60
+    bne t3, t4, rf_next
+rf_found:
+    sw a5, parse_ptr, t4
+    lw a0, 4(a2)
+    ret
+rf_next:
+    addi a2, a2, 8
+    j rf_entry
+rf_none:
+    li a0, 0
+    ret
+
+# Decimal/exponent scanner and binary32 converter. The sign belongs to unary,
+# not to this literal. Returns raw IEEE-754 single bits in a0.
+parse_float_literal:
+    la t0, parse_ptr
+    lw t1, 0(t0)
+    li t3, 0
+    fmv.w.x ft0, zero
+    la t4, ten_f
+    flw ft1, 0(t4)
+pfl_integer:
+    CHECK_PARSE (t1, pfl_bad)
+    lbu t2, 0(t1)
+    li t4, 48
+    bltu t2, t4, pfl_after_integer
+    li t4, 57
+    bgtu t2, t4, pfl_after_integer
+    addi t2, t2, -48
+    fcvt.s.w ft2, t2
+    fmul.s ft0, ft0, ft1
+    fadd.s ft0, ft0, ft2
+    addi t3, t3, 1
+    addi t1, t1, 1
+    j pfl_integer
+pfl_after_integer:
+    li t4, 46
+    bne t2, t4, pfl_digits_done
+    addi t1, t1, 1
+    la t4, tenth_f
+    flw ft3, 0(t4)
+    flw ft4, 0(t4)
+pfl_fraction:
+    CHECK_PARSE (t1, pfl_bad)
+    lbu t2, 0(t1)
+    li t4, 48
+    bltu t2, t4, pfl_digits_done
+    li t4, 57
+    bgtu t2, t4, pfl_digits_done
+    addi t2, t2, -48
+    fcvt.s.w ft2, t2
+    fmul.s ft2, ft2, ft3
+    fadd.s ft0, ft0, ft2
+    fmul.s ft3, ft3, ft4
+    addi t3, t3, 1
+    addi t1, t1, 1
+    j pfl_fraction
+pfl_digits_done:
+    beqz t3, pfl_bad
+    CHECK_PARSE (t1, pfl_bad)
+    lbu t2, 0(t1)
+    li t4, 69
+    beq t2, t4, pfl_exponent
+    li t4, 101
+    bne t2, t4, pfl_finish
+pfl_exponent:
+    addi t1, t1, 1
+    CHECK_PARSE (t1, pfl_bad)
+    lbu t2, 0(t1)
+    li a4, 0
+    li t4, 43
+    beq t2, t4, pfl_exp_sign_done
+    li t4, 45
+    bne t2, t4, pfl_exp_start
+    li a4, 1
+pfl_exp_sign_done:
+    addi t1, t1, 1
+pfl_exp_start:
+    li a2, 0
+    li a3, 0
+pfl_exp_digits:
+    CHECK_PARSE (t1, pfl_bad)
+    lbu t2, 0(t1)
+    li t4, 48
+    bltu t2, t4, pfl_exp_done
+    li t4, 57
+    bgtu t2, t4, pfl_exp_done
+    li t4, 100
+    bgtu a2, t4, pfl_math
+    li t4, 10
+    mul a2, a2, t4
+    addi t2, t2, -48
+    add a2, a2, t2
+    li t4, 1000
+    bgtu a2, t4, pfl_math
+    addi a3, a3, 1
+    addi t1, t1, 1
+    j pfl_exp_digits
+pfl_exp_done:
+    beqz a3, pfl_bad
+    la t4, ten_f
+    flw ft1, 0(t4)
+    la t4, one_f
+    flw ft2, 0(t4)
+pfl_scale:
+    beqz a2, pfl_apply_scale
+    fmul.s ft2, ft2, ft1
+    addi a2, a2, -1
+    j pfl_scale
+pfl_apply_scale:
+    bnez a4, pfl_scale_down
+    fmul.s ft0, ft0, ft2
+    j pfl_finish
+pfl_scale_down:
+    fdiv.s ft0, ft0, ft2
+pfl_finish:
+    sw t1, 0(t0)
+    fmv.x.w a0, ft0
+    ret
+pfl_bad:
+    j error_syntax
+pfl_math:
+    j error_math
 parse_variable_ref:
     ENTER_FRAME (16)
     sw ra, 0(sp)
@@ -2344,6 +2661,8 @@ vm_loop:
 vm_not_write:
     li t1, OP_PUSH_F
     beq s1, t1, vm_push_f
+    li t1, OP_PUSH_BITS
+    beq s1, t1, vm_push_bits
     li t1, OP_PUSH_V
     beq s1, t1, vm_push_v
     li t1, OP_STORE_V
@@ -2372,6 +2691,18 @@ safety_near_20:
     bne s1, t1, safety_near_21
     j vm_neg
 safety_near_21:
+    li t1, OP_POW
+    bne s1, t1, safety_near_pow
+    j vm_pow
+safety_near_pow:
+    li t1, OP_ABS
+    bne s1, t1, safety_near_abs
+    j vm_abs
+safety_near_abs:
+    li t1, OP_SQRT
+    bne s1, t1, safety_near_sqrt
+    j vm_sqrt
+safety_near_sqrt:
     li t1, OP_EQ
     bne s1, t1, safety_near_22
     j vm_eq
@@ -2396,6 +2727,14 @@ safety_near_26:
     bne s1, t1, safety_near_27
     j vm_ge
 safety_near_27:
+    li t1, OP_TRUNC
+    bne s1, t1, safety_near_trunc
+    j vm_trunc
+safety_near_trunc:
+    li t1, OP_SGN
+    bne s1, t1, safety_near_sgn
+    j vm_sgn
+safety_near_sgn:
     li t1, OP_JUMP
     bne s1, t1, safety_near_28
     j vm_jump
@@ -2443,6 +2782,13 @@ vm_push_f:
     call fetch_word
     CHECK_ERROR (vm_run_return)
     fcvt.s.w ft0, a0
+    call vm_push_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_push_bits:
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    fmv.w.x ft0, a0
     call vm_push_ft0
     CHECK_ERROR (vm_run_return)
     j vm_loop
@@ -2524,6 +2870,10 @@ vm_mul:
 vm_div:
     call vm_pop2
     CHECK_ERROR (vm_run_return)
+    la t0, zero_f
+    flw ft2, 0(t0)
+    feq.s t0, ft0, ft2
+    bnez t0, vm_math_error
     fdiv.s ft0, ft1, ft0
     call vm_push_ft0
     CHECK_ERROR (vm_run_return)
@@ -2535,6 +2885,110 @@ vm_neg:
     call vm_push_ft0
     CHECK_ERROR (vm_run_return)
     j vm_loop
+vm_pow:
+    call vm_pop2
+    CHECK_ERROR (vm_run_return)
+    # exponent must round-trip through a signed integer with truncation.
+    fcvt.w.s t0, ft0, rtz
+    fcvt.s.w ft2, t0
+    feq.s t2, ft0, ft2
+    beqz t2, vm_math_error
+    li t2, -2147483648
+    beq t0, t2, vm_math_error
+    li t1, 0
+    bgez t0, vm_pow_magnitude
+    la t2, zero_f
+    flw ft2, 0(t2)
+    feq.s t2, ft1, ft2
+    bnez t2, vm_math_error
+    neg t0, t0
+    li t1, 1
+vm_pow_magnitude:
+    fsgnj.s ft3, ft1, ft1
+    la t2, one_f
+    flw ft0, 0(t2)
+vm_pow_loop:
+    beqz t0, vm_pow_reciprocal
+    andi t2, t0, 1
+    beqz t2, vm_pow_square
+    fmul.s ft0, ft0, ft3
+vm_pow_square:
+    srli t0, t0, 1
+    beqz t0, vm_pow_reciprocal
+    fmul.s ft3, ft3, ft3
+    j vm_pow_loop
+vm_pow_reciprocal:
+    beqz t1, vm_pow_push
+    la t2, one_f
+    flw ft2, 0(t2)
+    fdiv.s ft0, ft2, ft0
+vm_pow_push:
+    call vm_push_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_abs:
+    call vm_pop_ft0
+    CHECK_ERROR (vm_run_return)
+    fsgnjx.s ft0, ft0, ft0
+    call vm_push_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_sqrt:
+    call vm_pop_ft0
+    CHECK_ERROR (vm_run_return)
+    la t0, zero_f
+    flw ft1, 0(t0)
+    flt.s t0, ft0, ft1
+    bnez t0, vm_math_error
+    fsqrt.s ft0, ft0
+    call vm_push_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_trunc:
+    call vm_pop_ft0
+    CHECK_ERROR (vm_run_return)
+    # Reject NaN/infinity under the existing arithmetic-error contract. For
+    # finite binary32 values at or above 2^23, every representable value is
+    # already integral, so preserve it without narrowing through signed int32.
+    fmv.x.w t0, ft0
+    slli t1, t0, 1
+    srli t1, t1, 1
+    srli t2, t1, 23
+    li t3, 255
+    beq t2, t3, vm_math_error
+    li t2, 0x4b000000
+    bgeu t1, t2, vm_trunc_push
+    fcvt.w.s t0, ft0, rtz
+    fcvt.s.w ft0, t0
+vm_trunc_push:
+    call vm_push_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_sgn:
+    call vm_pop_ft0
+    CHECK_ERROR (vm_run_return)
+    la t0, zero_f
+    flw ft1, 0(t0)
+    feq.s t0, ft0, ft1
+    bnez t0, vm_sgn_zero
+    flt.s t0, ft0, ft1
+    bnez t0, vm_sgn_negative
+    la t0, one_f
+    flw ft0, 0(t0)
+    j vm_sgn_push
+vm_sgn_negative:
+    la t0, neg_one_f
+    flw ft0, 0(t0)
+    j vm_sgn_push
+vm_sgn_zero:
+    fsgnj.s ft0, ft1, ft1
+vm_sgn_push:
+    call vm_push_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_math_error:
+    call error_math
+    j vm_run_return
 vm_eq:
     call vm_pop2
     CHECK_ERROR (vm_run_return)
@@ -3156,6 +3610,10 @@ error_proc_stack:
 error_file:
     li a0, ERR_FILE
     la a1, msg_file
+    j set_error
+error_math:
+    li a0, ERR_MATH
+    la a1, msg_math
     j set_error
 
 check_variable:

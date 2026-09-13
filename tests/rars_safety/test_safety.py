@@ -122,6 +122,48 @@ call repl_store_line
     "invalid_repl_slot": "li a0, 128\ncall repl_text_addr\n" + error_is("ERR_LINES"),
     "array_bounds": "li t2, 0\nli t3, 100\ncall array_addr\n" + error_is("ERR_ARRAY"),
     "missing_operand": "li a0, OP_PUSH_F\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
+    "expression_opcode_safety": """
+li a0, OP_PUSH_BITS
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li a0, OP_POW
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW") + """
+call reset_runtime
+li a0, OP_ABS
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW") + """
+call reset_runtime
+li a0, OP_SQRT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW") + """
+call reset_runtime
+li a0, OP_TRUNC
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW") + """
+call reset_runtime
+li a0, OP_SGN
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW"),
     "unknown_opcode": "li a0, 999\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
     "malformed_string_operand": "li a0, OP_PRINT_S\ncall emit_word\nli a0, 1\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_STRING"),
     "malformed_variable_operand": "li a0, OP_PUSH_V\ncall emit_word\nli a0, 26\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_ARRAY"),

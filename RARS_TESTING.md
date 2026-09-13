@@ -186,8 +186,8 @@ py -3 -B -m unittest discover -s tests/rars_safety -p "test_*.py" -v
 $LASTEXITCODE
 ```
 
-Успех: `Ran 13 tests`, `OK`, код 0. Это 55 реальных запусков RARS:
-38 низкоуровневых subtests, один ABI harness и 16 batch/REPL-сценариев.
+Успех: `Ran 13 tests`, `OK`, код 0. Это 56 реальных запусков RARS:
+39 низкоуровневых subtests, один ABI harness и 16 batch/REPL-сценариев.
 Harness добавляет только входную точку и тестовые данные во временную копию
 целевого ASM и вызывает его процедуры. Python не реализует семантику FOCAL
 и не является нормативным oracle. Эти проверки ресурсов не засчитываются
@@ -342,10 +342,40 @@ LIST/WRITE/SAVE по-прежнему выводят сохранённый оп
 QUIT, отсутствие partial immediate execution, совпадение immediate/stored/
 LOAD/batch, сохранность source и отдельный ASM-тест line offset.
 
+## Числа, выражения, степень и функции (этап 7)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_expr -p "test_*.py" -v
+```
+
+`compile_expr` остаётся единственной точкой expression grammar. Арифметические
+уровни: binary `+/-`; затем `/`; затем `*`; затем unary sign над power;
+right-associative `^`; primary (literal, variable, function или grouping).
+Таким образом `*` связывает сильнее `/`, `-A^I` означает `-(A^I)`, а знак
+после обычного binary operator без группировки отвергается. Правая сторона `^`
+может иметь один знак, поэтому `2^-2` допустимо.
+
+Decimal scanner принимает целую, fixed-point и E/e формы, строит значение
+только Float32-инструкциями RARS и помещает raw IEEE-754 binary32 bits после
+`OP_PUSH_BITS`. Старый integer-конвертирующий `OP_PUSH_F` оставлен для прежнего
+служебного wordcode. Скобки `()`, `[]`, `<>` проверяются попарно; исходник не
+переписывается.
+
+Добавлены `OP_POW`, `OP_ABS`, `OP_SQRT`, `OP_TRUNC`, `OP_SGN`. Степень
+проверяет целочисленность показателя и использует exponentiation by squaring;
+отрицательный показатель вычисляется через reciprocal, `0^0` даёт 1.
+Деление на ноль, дробный показатель, `0` в отрицательной степени и отрицательный
+аргумент FSQT дают sticky E15 без исключения RARS. Реализованы только FABS,
+FSQT, FITR и FSGN, с тремя эквивалентными типами скобок.
+
+Suite использует настоящий RARS и exact stdout, проверяет literal wordcode bits,
+нестандартные приоритеты, unary restrictions, brackets/functions, compile/runtime
+recovery и общий immediate/stored/LOAD/batch path. Python остаётся драйвером,
+не parser или semantic oracle.
+
 ## Ограничения
 
-- числовые литералы в RARS-исходнике пока целые;
-- значения внутри VM, `ASK` и `TYPE` чисел используют float;
+- значения внутри VM, literal parser, `ASK` и `TYPE` чисел используют Float32;
 - `FOR` поддерживает только шаг `+1`;
 - RARS REPL имеет 128 физических slots по 127 байт текста плюс NUL;
 - RUN всё ещё ограничен 8191 байтом сериализованного исходника плюс NUL;

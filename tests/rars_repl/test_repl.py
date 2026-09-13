@@ -29,7 +29,7 @@ HELP = ('Commands:\n'
         '  EXIT              exit interpreter/RARS\n'
         'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\n'
         'Standalone DO/D RETURN/R: recognized; not implemented yet.\n'
-        'Legacy integer aliases remain temporary; expressions and IF/FOR remain legacy.\n')
+        'Legacy integer aliases remain temporary; identifiers and IF/FOR remain legacy.\n')
 
 
 class ReplTests(unittest.TestCase):
