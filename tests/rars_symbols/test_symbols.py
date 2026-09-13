@@ -135,11 +135,11 @@ class SymbolTests(unittest.TestCase):
         ], files={"keep.focal": "1.01 TYPE LOWER,!\n1.02 TYPE ARRAY(2),!\n1.03 Q\n"})
 
     def test_ask_and_legacy_for_share_symbol_table(self):
-        stdin = ("ASK LONGNAME,\"Value: \"\n12.5\n"
-                 "ASK ARRAY(1.5),\"Item: \"\n7.5\n"
+        stdin = ("ASK \"Value=\",LONGNAME\n12.5\n"
+                 "ASK \"Item=\",ARRAY(1.5)\n7.5\n"
                  "SET SUM=0;FOR INDEX=1,3 DO SET SUM=SUM+INDEX;TYPE SU,!\n"
                  "TYPE LO,!,AR(2),!\nEXIT\n")
-        expected = (BANNER + "> Value: > Item: > 6.0\n> 12.5\n7.5\n> ")
+        expected = (BANNER + "> Value=:> Item=:> 6.0\n> 12.5\n7.5\n> ")
         self.execute(self.source, expected, stdin=stdin)
 
     def test_compile_errors_do_not_create_or_modify_symbols(self):

@@ -111,9 +111,10 @@ safety_near_7:
 .eqv OP_PRINT_S    64
 .eqv OP_PRINT_F    65
 .eqv OP_PRINT_NL   66
-.eqv OP_READ_F     67
+.eqv OP_ASK_V      67
 .eqv OP_WRITE      68
 .eqv OP_SET_FORMAT 69
+.eqv OP_ASK_ARR    70
 .eqv TYPE_FMT_DEFAULT 0
 .eqv TYPE_FMT_EXP     1
 .eqv TYPE_FMT_FIXED   2
@@ -172,6 +173,8 @@ type_format_width: .word 0
 type_format_precision: .word 0
 type_num_buf:   .space 256
 type_num_buf_end:
+ask_input_buf:  .space 256
+ask_input_buf_end:
 file_space:     .byte 32
 file_newline:   .byte 10
     .align 2
@@ -196,7 +199,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer line aliases and IF/FOR control flow remain compatibility paths.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer line aliases and IF/FOR control flow remain compatibility paths.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -1927,53 +1930,84 @@ compile_type_format_return:
     addi sp, sp, 32
     ret
 compile_ask:
-    ENTER_FRAME (16)
+    ENTER_FRAME (32)
     sw ra, 0(sp)
+    sw s0, 4(sp)
     call consume_ask
     CHECK_ERROR (compile_ask_return)
+    li s0, 0
+cask_loop:
+    call skip_parse_spaces
+    CHECK_ERROR (compile_ask_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_ask_return)
+    bnez a0, compile_ask_bad_source
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_ask_bad_source)
+    lbu t1, 0(t0)
+    li t2, 34
+    beq t1, t2, cask_string
+    li t2, 33
+    beq t1, t2, cask_newline
+    li t2, 44
+    beq t1, t2, compile_ask_bad_source
     call parse_variable_ref
     CHECK_ERROR (compile_ask_return)
-    sw a0, 4(sp)
-    sw a1, 8(sp)
-    call skip_parse_spaces
+    sw a0, 8(sp)
+    sw a1, 12(sp)
+    beqz a1, cask_emit_scalar
+    li a0, OP_ASK_ARR
+    j cask_emit_target
+cask_emit_scalar:
+    li a0, OP_ASK_V
+cask_emit_target:
+    call emit_word
     CHECK_ERROR (compile_ask_return)
-    call consume_comma
+    lw a0, 8(sp)
+    call emit_word
     CHECK_ERROR (compile_ask_return)
-    call skip_parse_spaces
-    CHECK_ERROR (compile_ask_return)
+    j cask_item_done
+cask_string:
     call copy_string_to_pool
     CHECK_ERROR (compile_ask_return)
-    sw a0, 12(sp)
+    sw a0, 8(sp)
     li a0, OP_PRINT_S
     call emit_word
     CHECK_ERROR (compile_ask_return)
-    lw a0, 12(sp)
+    lw a0, 8(sp)
     call emit_word
     CHECK_ERROR (compile_ask_return)
-    li a0, OP_READ_F
+    j cask_item_done
+cask_newline:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    li a0, OP_PRINT_NL
     call emit_word
     CHECK_ERROR (compile_ask_return)
-    lw t0, 8(sp)
-    lw t1, 4(sp)
-    beqz t0, cask_scalar
-    li a0, OP_STORE_ARR
-    call emit_word
+cask_item_done:
+    li s0, 1
+    call skip_parse_spaces
     CHECK_ERROR (compile_ask_return)
-    lw a0, 4(sp)
-    call emit_word
+    call is_parse_statement_end
     CHECK_ERROR (compile_ask_return)
-    j cask_done
-cask_scalar:
-    li a0, OP_STORE_V
-    call emit_word
-    CHECK_ERROR (compile_ask_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_ask_return)
+    bnez a0, cask_done
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_ask_bad_source)
+    lbu t1, 0(t0)
+    li t2, 44
+    bne t1, t2, compile_ask_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    j cask_loop
 cask_done:
+    beqz s0, compile_ask_bad_source
+    j compile_ask_return
+compile_ask_bad_source:
+    call error_syntax
 compile_ask_return:
     lw ra, 0(sp)
-    addi sp, sp, 16
+    lw s0, 4(sp)
+    addi sp, sp, 32
     ret
 compile_if:
     ENTER_FRAME (16)
@@ -2952,10 +2986,14 @@ safety_near_34:
     bne s1, t1, safety_near_35
     j vm_print_nl
 safety_near_35:
-    li t1, OP_READ_F
+    li t1, OP_ASK_V
     bne s1, t1, safety_near_36
-    j vm_read_f
+    j vm_ask_v
 safety_near_36:
+    li t1, OP_ASK_ARR
+    bne s1, t1, safety_near_ask_arr
+    j vm_ask_arr
+safety_near_ask_arr:
     li t1, OP_HALT
     bne s1, t1, safety_near_37
     j vm_halt
@@ -3297,11 +3335,37 @@ vm_print_nl:
     li a7, 11
     ecall
     j vm_loop
-vm_read_f:
-    li a7, 6
-    ecall
-    fmv.s ft0, fa0
-    call vm_push_ft0
+vm_ask_v:
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv s2, a0
+    call validate_symbol_key
+    CHECK_ERROR (vm_run_return)
+    call ask_read_expression
+    CHECK_ERROR (vm_run_return)
+    mv a0, s2
+    li a1, 0
+    li a2, 0
+    call symbol_store_ft0
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_ask_arr:
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv s2, a0
+    call validate_symbol_key
+    CHECK_ERROR (vm_run_return)
+    call vm_pop_ft0
+    CHECK_ERROR (vm_run_return)
+    call index_from_ft0
+    CHECK_ERROR (vm_run_return)
+    sw a0, 20(sp)
+    call ask_read_expression
+    CHECK_ERROR (vm_run_return)
+    mv a0, s2
+    li a1, 1
+    lw a2, 20(sp)
+    call symbol_store_ft0
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_write:
@@ -3343,6 +3407,82 @@ vm_run_return:
     lw s2, 12(sp)
     lw ra, 0(sp)
     addi sp, sp, 32
+    ret
+
+# Read and evaluate one ASK answer with the normative expression compiler.
+# Temporary wordcode is appended after the current program end and hidden again
+# on every exit. The outer VM/program/parser cursors and stack baseline are
+# restored without clearing a sticky compile/runtime error.
+ask_read_expression:
+    ENTER_FRAME (64)
+    sw ra, 0(sp)
+    lw t0, pc_ptr
+    sw t0, 4(sp)
+    lw t0, bc_ptr
+    sw t0, 8(sp)
+    lw t0, parse_begin
+    sw t0, 12(sp)
+    lw t0, parse_end
+    sw t0, 16(sp)
+    lw t0, parse_ptr
+    sw t0, 20(sp)
+    lw t0, vm_sp_ptr
+    sw t0, 24(sp)
+    li a0, 58
+    li a7, 11
+    ecall
+    la a0, ask_input_buf
+    li a1, 256
+    li a7, 8
+    ecall
+    call validate_ask_input
+    CHECK_ERROR (ask_read_expression_cleanup)
+    call skip_parse_spaces
+    CHECK_ERROR (ask_read_expression_cleanup)
+    call compile_expr
+    CHECK_ERROR (ask_read_expression_cleanup)
+    call skip_parse_spaces
+    CHECK_ERROR (ask_read_expression_cleanup)
+    call require_ask_input_end
+    CHECK_ERROR (ask_read_expression_cleanup)
+    li a0, OP_HALT
+    call emit_word
+    CHECK_ERROR (ask_read_expression_cleanup)
+    lw t0, 8(sp)
+    sw t0, pc_ptr, t1
+    call vm_run
+    CHECK_ERROR (ask_read_expression_cleanup)
+    lw t0, vm_sp_ptr
+    lw t1, 24(sp)
+    addi t1, t1, 4
+    bne t0, t1, ask_read_expression_bad_stack
+    call vm_pop_ft0
+    CHECK_ERROR (ask_read_expression_cleanup)
+    fmv.x.w t0, ft0
+    sw t0, 28(sp)
+    j ask_read_expression_cleanup
+ask_read_expression_bad_stack:
+    call error_vm_underflow
+ask_read_expression_cleanup:
+    lw t0, 4(sp)
+    sw t0, pc_ptr, t1
+    lw t0, 8(sp)
+    sw t0, bc_ptr, t1
+    lw t0, 12(sp)
+    sw t0, parse_begin, t1
+    lw t0, 16(sp)
+    sw t0, parse_end, t1
+    lw t0, 20(sp)
+    sw t0, parse_ptr, t1
+    lw t0, 24(sp)
+    sw t0, vm_sp_ptr, t1
+    lw t0, error_code
+    bnez t0, ask_read_expression_return
+    lw t0, 28(sp)
+    fmv.w.x ft0, t0
+ask_read_expression_return:
+    lw ra, 0(sp)
+    addi sp, sp, 64
     ret
 
 # Runtime validation is shared by OP_SET_FORMAT and every numeric print, so a
@@ -4355,6 +4495,49 @@ vi_done:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
+
+# RARS ReadString consumes one complete host line before truncating it. Thus a
+# full buffer without LF is rejected as E07, while the host-side remainder is
+# already drained and cannot become another ASK answer or REPL command.
+validate_ask_input:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    la a0, ask_input_buf
+    li a1, 256
+    call set_parse_span
+    CHECK_ERROR (validate_ask_input_return)
+    lw t0, parse_end
+    la t1, ask_input_buf_end
+    addi t1, t1, -1
+    bne t0, t1, validate_ask_input_return
+    lbu t2, -1(t0)
+    li t1, 10
+    beq t2, t1, validate_ask_input_return
+    call error_text
+validate_ask_input_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# After outer spaces, one ASK response must end at NUL/LF or CRLF/CR+NUL.
+require_ask_input_end:
+    CHECK_ERROR (safety_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, require_ask_input_end_bad)
+    lbu t1, 0(t0)
+    beqz t1, safety_return
+    li t2, 10
+    beq t1, t2, safety_return
+    li t2, 13
+    bne t1, t2, require_ask_input_end_bad
+    addi t0, t0, 1
+    CHECK_PARSE (t0, require_ask_input_end_bad)
+    lbu t1, 0(t0)
+    beqz t1, safety_return
+    li t2, 10
+    beq t1, t2, safety_return
+require_ask_input_end_bad:
+    j error_syntax
 
 
 # One integer representation everywhere: group*100 + line, 101..9999,

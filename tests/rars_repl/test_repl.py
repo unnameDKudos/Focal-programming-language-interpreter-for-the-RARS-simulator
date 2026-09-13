@@ -29,6 +29,7 @@ HELP = ('Commands:\n'
         '  EXIT              exit interpreter/RARS\n'
         'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\n'
         'TYPE formats: % exponential; %W integer field; %W.0d fixed field.\n'
+        'ASK items: "text", variable, !; each variable reads one expression after \':\'.\n'
         'Standalone DO/D RETURN/R: recognized; not implemented yet.\n'
         'Legacy integer line aliases and IF/FOR control flow remain compatibility paths.\n')
 
@@ -118,10 +119,10 @@ class ReplTests(unittest.TestCase):
                       ('6 g 8', ''), ('7 t "bad",!', ''), ('8 q', ''), ('RUN', '6.0\n')])
 
     def test_ask_abbreviation(self):
-        # Numeric response is input to RARS ReadFloat, not a REPL command.
         for token in ['a', 'aSk']:
             with self.subTest(token=token):
-                self.session([(token + ' A,"Value?"\n3', 'Value?'), ('t A,!', '3.0\n')])
+                self.session([(token + ' "Value?",A\n1+2', 'Value?:'),
+                              ('t A,!', '3.0\n')])
 
     def test_comments_preserve_text_and_do_not_execute_tail(self):
         self.session([('c TyPe "no"', ''), ('1 CoMmEnT arbitrary MiXeD text', ''),

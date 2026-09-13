@@ -287,6 +287,35 @@ la t0, bytecode_buf
 sw t0, pc_ptr, t1
 call vm_run
 """ + error_is("ERR_VM_UNDERFLOW"),
+    "ask_scalar_missing_operand": """
+li a0, OP_ASK_V
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS"),
+    "ask_malformed_symbol_operand": """
+li a0, OP_ASK_V
+call emit_word
+li a0, 26
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_ARRAY"),
+    "ask_indexed_stack_underflow": """
+li a0, OP_ASK_ARR
+call emit_word
+li a0, 65
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW"),
     "bad_absolute_jump": "li a0, OP_JUMP_ABS\ncall emit_word\nli a0, 1\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
     "procedural_stack_guard": "mv t0, sp\nsw t0, proc_stack_floor, t1\ncall compile_program\n" + error_is("ERR_PROC_STACK"),
 }
@@ -451,11 +480,10 @@ test_fail:
                          'test_symbol_source: .asciz "SET ALPHA=1"\n')
 
     def execute(self, source, expected, stdin=None, files=None):
-        if stdin is not None:
+        if stdin is not None and stdin.endswith('\nQUIT\n'):
             # Stage 2 used a final bare QUIT solely as test-session teardown.
             # FR-15/23 now require EXIT there; stored FOCAL QUIT and every
             # safety assertion/expected output remain unchanged.
-            self.assertTrue(stdin.endswith('\nQUIT\n'))
             stdin = stdin.removesuffix('QUIT\n') + 'EXIT\n'
         with tempfile.TemporaryDirectory(prefix="focal-safety-") as directory:
             for name, content in (files or {}).items():
@@ -582,6 +610,176 @@ test_fail:
                      'FOCAL/RARS error [E09]: variable/array bounds\n> 7.0\n'
                      '> 1.01 SET A=7\n1.02 TYPE A(1E10),!\n> ',
                      '1 SET A=7\n2 TYPE A(1E10),!\nRUN\nTYPE A,!\nLIST\nQUIT\n')
+
+    def test_ask_nested_evaluator_state_and_boundaries(self):
+        success = """
+li a0, OP_HALT
+call emit_word
+la a0, test_symbol_source
+li a1, 32
+call set_parse_span
+li t0, 0x3f800000
+fmv.w.x ft0, t0
+call vm_push_ft0
+lw s0, pc_ptr
+lw s1, bc_ptr
+lw s2, parse_begin
+lw s3, parse_end
+lw s4, parse_ptr
+lw s5, vm_sp_ptr
+li t0, TYPE_FMT_FIXED
+sw t0, type_format_mode, t1
+li t0, 8
+sw t0, type_format_width, t1
+li t0, 2
+sw t0, type_format_precision, t1
+call ask_read_expression
+""" + error_is("0") + """
+fmv.x.w t0, ft0
+li t1, 0x40400000
+bne t0, t1, test_fail
+lw t0, pc_ptr
+bne t0, s0, test_fail
+lw t0, bc_ptr
+bne t0, s1, test_fail
+lw t0, parse_begin
+bne t0, s2, test_fail
+lw t0, parse_end
+bne t0, s3, test_fail
+lw t0, parse_ptr
+bne t0, s4, test_fail
+lw t0, vm_sp_ptr
+bne t0, s5, test_fail
+la t0, vm_stack
+lw t1, 0(t0)
+li t2, 0x3f800000
+bne t1, t2, test_fail
+lw t0, type_format_mode
+li t1, TYPE_FMT_FIXED
+bne t0, t1, test_fail
+lw t0, type_format_width
+li t1, 8
+bne t0, t1, test_fail
+lw t0, type_format_precision
+li t1, 2
+bne t0, t1, test_fail
+"""
+        runtime_error = """
+li a0, OP_HALT
+call emit_word
+la a0, test_symbol_source
+li a1, 32
+call set_parse_span
+li t0, 0x3f800000
+fmv.w.x ft0, t0
+call vm_push_ft0
+lw s0, pc_ptr
+lw s1, bc_ptr
+lw s2, parse_begin
+lw s3, parse_end
+lw s4, parse_ptr
+lw s5, vm_sp_ptr
+call ask_read_expression
+""" + error_is("ERR_MATH") + """
+lw t0, pc_ptr
+bne t0, s0, test_fail
+lw t0, bc_ptr
+bne t0, s1, test_fail
+lw t0, parse_begin
+bne t0, s2, test_fail
+lw t0, parse_end
+bne t0, s3, test_fail
+lw t0, parse_ptr
+bne t0, s4, test_fail
+lw t0, vm_sp_ptr
+bne t0, s5, test_fail
+la t0, vm_stack
+lw t1, 0(t0)
+li t2, 0x3f800000
+bne t1, t2, test_fail
+"""
+        capacity = """
+la t0, vm_stack
+li t1, 0x12345678
+sw t1, 0(t0)
+addi t0, t0, 4
+sw t0, vm_sp_ptr, t1
+la t0, bytecode_end
+addi t0, t0, -4
+sw t0, bc_ptr, t1
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+lw s0, pc_ptr
+lw s1, bc_ptr
+lw s2, vm_sp_ptr
+call ask_read_expression
+""" + error_is("ERR_BC_FULL") + """
+lw t0, pc_ptr
+bne t0, s0, test_fail
+lw t0, bc_ptr
+bne t0, s1, test_fail
+lw t0, vm_sp_ptr
+bne t0, s2, test_fail
+la t0, vm_stack
+lw t1, 0(t0)
+li t2, 0x12345678
+bne t1, t2, test_fail
+"""
+        input_boundary = """
+la t0, ask_input_buf_end
+li t1, 85
+sb t1, 0(t0)
+lw s0, pc_ptr
+lw s1, bc_ptr
+lw s2, vm_sp_ptr
+call ask_read_expression
+""" + error_is("ERR_TEXT") + """
+lw t0, pc_ptr
+bne t0, s0, test_fail
+lw t0, bc_ptr
+bne t0, s1, test_fail
+lw t0, vm_sp_ptr
+bne t0, s2, test_fail
+la t0, ask_input_buf_end
+lbu t1, 0(t0)
+li t2, 85
+bne t1, t2, test_fail
+"""
+        cases = [
+            ("success", success, "1+2\n"),
+            ("runtime_error", runtime_error, "1/0\n"),
+            ("bytecode_capacity", capacity, "1\n"),
+            ("input_boundary", input_boundary, "1" * 300 + "\n"),
+        ]
+        for name, body, stdin in cases:
+            with self.subTest(name=name):
+                self.execute(self.harness(body), ":PASS\n", stdin=stdin)
+
+    def test_repeated_ask_evaluation_reuses_temporary_wordcode(self):
+        body = """
+li a0, OP_HALT
+call emit_word
+lw s0, bc_ptr
+lw s1, pc_ptr
+lw s2, vm_sp_ptr
+li s3, 32
+ask_repeat_loop:
+call ask_read_expression
+lw t0, error_code
+bnez t0, test_fail
+fmv.x.w t0, ft0
+li t1, 0x3f800000
+bne t0, t1, test_fail
+lw t0, bc_ptr
+bne t0, s0, test_fail
+lw t0, pc_ptr
+bne t0, s1, test_fail
+lw t0, vm_sp_ptr
+bne t0, s2, test_fail
+addi s3, s3, -1
+bnez s3, ask_repeat_loop
+"""
+        self.execute(self.harness(body), ":" * 32 + "PASS\n", stdin="1\n" * 32)
 
 
 if __name__ == "__main__":

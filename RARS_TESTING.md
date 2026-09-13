@@ -186,8 +186,9 @@ py -3 -B -m unittest discover -s tests/rars_safety -p "test_*.py" -v
 $LASTEXITCODE
 ```
 
-Успех: `Ran 13 tests`, `OK`, код 0. Это 65 реальных запусков RARS:
-48 низкоуровневых subtests, один ABI harness и 16 batch/REPL-сценариев.
+Успех: `Ran 15 tests`, `OK`, код 0. Это 73 реальных запуска RARS:
+51 низкоуровневый subtest, один ABI harness, 16 batch/REPL-сценариев и пять
+ASK nested-evaluator harness-сценариев.
 Harness добавляет только входную точку и тестовые данные во временную копию
 целевого ASM и вызывает его процедуры. Python не реализует семантику FOCAL
 и не является нормативным oracle. Эти проверки ресурсов не засчитываются
@@ -458,6 +459,56 @@ immediate/stored/LOAD/batch path. Low-level safety suite дополнитель�
 `OP_PRINT_F`. Python служит только драйвером и проверяет stdout/fixtures; вся
 семантика форматирования исполняется ASM в RARS.
 
+## Полноценный ASK (этап 10)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_ask -p "test_*.py" -v
+```
+
+`ASK`/`A` принимает непустой список `item ("," item)*`, где item — строковый
+литерал, scalar/indexed variable target или `!`. Строка выводится дословно,
+`!` печатает LF. Для каждого variable target VM печатает ровно `:` без пробела
+и newline, после чего читает отдельную bounded physical input line. `%`, `¤`,
+`@`, буквенные ответы и специальные исторические delimiters ASK в обязательный
+профиль не входят.
+
+Ответ является исходным текстом одного FOCAL-выражения, а не аргументом RARS
+`ReadFloat`. После удаления внешних пробелов он компилируется существующим
+`compile_expr`; после выражения разрешены только пробелы и NUL/LF/CRLF.
+Следовательно, ASK наследует Float32 literals, арифметику, степень, функции,
+scalar/indexed reads и все E10/E15 semantics этапа 7 без второго parser.
+
+`OP_ASK_V` и `OP_ASK_ARR` содержат canonical symbol key. Индексированный target
+сначала вычисляет индекс из исходного ASK statement и применяет общий
+nearest-even `index_from_ft0`; при ошибке индексирования prompt не печатается и
+ответ не читается. Успешный ответ записывается только через
+`symbol_store_ft0`, поэтому first-two identity, F-reservation, scalar/indexed
+различие и общий предел 512 записей остаются едиными.
+
+Runtime evaluator сохраняет основной `pc_ptr`, `bc_ptr`, `parse_begin`,
+`parse_end`, `parse_ptr` и baseline `vm_sp_ptr`. Временный код выражения и
+`OP_HALT` добавляются в свободный хвост `bytecode_buf`, выполняются вложенным
+`vm_run`, дают ровно одно Float32 значение и затем скрываются восстановлением
+исходного `bc_ptr`. Все курсоры и stack baseline восстанавливаются как при
+успехе, так и при sticky compile/runtime error; TYPE format и symbols не
+сбрасываются. Поэтому повторные ASK не расходуют wordcode постоянно.
+
+Консольный ответ хранится в отдельном 256-байтовом `ask_input_buf` с NUL
+reservation. RARS ReadString потребляет целую host physical line до локального
+усечения; полное заполнение без LF отвергается как E07, а остаток этой строки не
+становится следующим ответом или REPL-командой. Пустой/ошибочный ответ прекращает
+текущее выполнение, не меняет текущий target и возвращает управление REPL.
+Успешные присваивания более ранних ASK items не откатываются.
+
+Dedicated suite использует настоящий RARS и exact stdout: строки/`!`/prompt,
+несколько зависимых targets, полный expression profile, aliases/case/indexed
+targets, 512/513 capacity, malformed lists and answers, runtime errors, длинный
+input, TYPE format persistence, compile-before-run atomicity, source
+preservation и immediate/stored/LOAD/batch paths. Safety suite дополнительно
+проверяет operands/underflow, границы input buffer, нехватку bytecode, cleanup
+pc/bc/parser/stack на success/error и повторное использование временного кода.
+Python остаётся только драйвером и проверяет stdin/stdout/files.
+
 ## Ограничения
 
 - значения внутри VM, literal parser, `ASK` и `TYPE` чисел используют Float32;
@@ -467,5 +518,3 @@ immediate/stored/LOAD/batch path. Low-level safety suite дополнитель�
   при превышении выдаёт ошибку, хотя LIST/WRITE/SAVE доступны для всей программы;
 - SAVE гарантирует контролируемую внутреннюю ошибку записи, но не откатывает
   внешнее содержимое уже частично записанного файла;
-- обработка неверного числового ввода ASK и остальные языковые ошибки из ТЗ
-  не реализуются этим low-level этапом.
