@@ -13,12 +13,11 @@ BANNER = 'FOCAL/RARS REPL. Enter HELP for commands.\n'
 UNKNOWN = 'FOCAL/RARS error [E10]: unknown statement\n'
 SYNTAX = 'FOCAL/RARS error [E10]: invalid source\n'
 DEFERRED = 'FOCAL/RARS error [E13]: recognized statement not implemented yet\n'
-MISSING = 'FOCAL/RARS error [E08]: line not found\n'
 HELP = ('Commands:\n'
         '  group.line text   add/replace; number only deletes (1.1 = 1.10)\n'
         '  FOCAL statement   execute immediately; keywords ignore case\n'
         '  RUN               run stored program; preserve variables\n'
-        '  G / GO / GOTO     FOCAL jump; no argument runs stored program\n'
+        '  G / GO / GOTO [g.ll] jump; no target starts at the first stored line\n'
         '  LIST              show stored program\n'
         '  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n'
         '  LOAD <file>       load program; preserve variables\n'
@@ -28,10 +27,11 @@ HELP = ('Commands:\n'
         '  QUIT / Q          stop FOCAL execution; return to REPL\n'
         '  EXIT              exit interpreter/RARS\n'
         'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\n'
+        'IF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\n'
         'TYPE formats: % exponential; %W integer field; %W.0d fixed field.\n'
         'ASK items: "text", variable, !; each variable reads one expression after \':\'.\n'
         'Standalone DO/D RETURN/R: recognized; not implemented yet.\n'
-        'Legacy integer line aliases and IF/FOR control flow remain compatibility paths.\n')
+        'Legacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n')
 
 
 class ReplTests(unittest.TestCase):
@@ -82,10 +82,10 @@ class ReplTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.session([('1 TYPE "NOT RUN",!', ''), (token, '1.01 TYPE "NOT RUN",!\n'), ('Q', '')])
 
-    def test_goto_argument_is_not_environment_run(self):
+    def test_goto_argument_uses_stored_line_target(self):
         for token in ['G', 'GO', 'GOTO']:
             with self.subTest(token=token):
-                self.session([('1 TYPE "NOT RUN",!', ''), (token + ' 1', MISSING), ('Q', '')])
+                self.session([('1 TYPE "TARGET",!', ''), (token + ' 1', 'TARGET\n'), ('Q', '')])
 
     def test_goto_without_argument_runs_through_focal_dispatch(self):
         for token in ['G', 'gO', 'GoTo']:

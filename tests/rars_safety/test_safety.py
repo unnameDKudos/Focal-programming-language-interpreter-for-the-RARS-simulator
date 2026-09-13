@@ -317,6 +317,122 @@ sw t0, pc_ptr, t1
 call vm_run
 """ + error_is("ERR_VM_UNDERFLOW"),
     "bad_absolute_jump": "li a0, OP_JUMP_ABS\ncall emit_word\nli a0, 1\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
+    "absolute_jump_boundaries": """
+li a0, OP_JUMP_ABS
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 1
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li a0, OP_JUMP_ABS
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, -4
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li a0, OP_JUMP_ABS
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 8
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS"),
+    "jump_missing_and_unknown_line_operands": """
+li a0, OP_JUMP
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li a0, OP_JUMP
+call emit_word
+li a0, 9999
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_LINES"),
+    "sign_branch_truncated_operands": """
+li a0, OP_SIGN_BRANCH
+call emit_word
+li a0, 101
+call emit_word
+li a0, 102
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS"),
+    "sign_branch_stack_underflow": """
+li a0, OP_SIGN_BRANCH
+call emit_word
+li a0, 101
+call emit_word
+li a0, 102
+call emit_word
+li a0, 103
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW"),
+    "sign_branch_corrupt_selected_target": """
+li t0, 0xbf800000
+fmv.w.x ft0, t0
+call vm_push_ft0
+li a0, OP_SIGN_BRANCH
+call emit_word
+li a0, 9999
+call emit_word
+li a0, 0
+call emit_word
+li a0, 0
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_LINES"),
+    "corrupt_line_target_offsets": """
+li t0, 1
+sw t0, line_count, t1
+li t0, 101
+sw t0, line_numbers, t1
+li t0, 1
+sw t0, line_offsets, t1
+li a0, OP_HALT
+call emit_word
+li a0, 101
+call set_pc_to_line
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li t0, 1
+sw t0, line_count, t1
+li t0, 101
+sw t0, line_numbers, t1
+li t0, -4
+sw t0, line_offsets, t1
+li a0, OP_HALT
+call emit_word
+li a0, 101
+call set_pc_to_line
+""" + error_is("ERR_BC_ACCESS"),
     "procedural_stack_guard": "mv t0, sp\nsw t0, proc_stack_floor, t1\ncall compile_program\n" + error_is("ERR_PROC_STACK"),
 }
 

@@ -108,6 +108,8 @@ safety_near_7:
 .eqv OP_HALT       51
 .eqv OP_JUMP_Z_ABS 52
 .eqv OP_JUMP_ABS   53
+.eqv OP_SIGN_BRANCH 54
+.eqv OP_JUMP_FIRST 55
 .eqv OP_PRINT_S    64
 .eqv OP_PRINT_F    65
 .eqv OP_PRINT_NL   66
@@ -140,6 +142,7 @@ pc_ptr:         .word 0
 vm_sp_ptr:      .word 0
 str_pool_ptr:   .word 0
 line_count:     .word 0
+compile_has_line_control: .word 0
 repl_enabled:   .word 1
 repl_line_count:.word 0
 symbol_count:   .word 0
@@ -199,7 +202,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer line aliases and IF/FOR control flow remain compatibility paths.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO [g.ll] jump; no target starts at the first stored line\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nIF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -379,15 +382,10 @@ repl_dispatch:
     # Only the exact environment token EXIT reaches process termination.
     j program_exit
 repl_focal:
-    li t0, TK_GOTO
-    bne s5, t0, repl_immediate
-    # FR-23: argument-less G/GO/GOTO is a FOCAL start request.
-    # An argument follows the unchanged immediate/compiler GOTO path.
-    call skip_parse_spaces
-    CHECK_ERROR (repl_loop)
-    call is_parse_line_end
-    CHECK_ERROR (repl_loop)
-    bnez a0, repl_run
+    # FOCAL control statements use the same physical-line compiler as every
+    # other immediate statement. repl_run_immediate safely binds stored line
+    # targets when the compiler reports line-control wordcode.
+    j repl_immediate
 
 repl_immediate:
     call repl_run_immediate
@@ -493,51 +491,60 @@ reset_runtime:
     sw t0, 0(t1)
     la t0, line_count
     sw zero, 0(t0)
+    sw zero, compile_has_line_control, t0
     ret
 repl_run_immediate:
     ENTER_FRAME (32)
     sw ra, 0(sp)
-    sw s4, 4(sp)
-    la s4, program_buf
-    sb zero, 0(s4)
-    la a0, input_line
-    call skip_spaces_a0
-    CHECK_ERROR (rri_done)
-rri_copy:
-    CHECK_PARSE (a0, rri_bad)
-    lbu t0, 0(a0)
-    beqz t0, rri_compile
-    li t1, 10
-    beq t0, t1, rri_compile
-    li t1, 13
-    beq t0, t1, rri_compile
-    mv t2, a0
-    mv a0, t0
-    call repl_append_char_to_program
-    CHECK_ERROR (rri_done)
-    addi a0, t2, 1
-    j rri_copy
-rri_compile:
+    # First compile the whole immediate physical line without execution. This
+    # preserves compile-before-run atomicity and detects whether it contains a
+    # line-target control statement.
     call reset_runtime
-    la a0, program_buf
-    li a1, 8192
+    la a0, input_line
+    li a1, 256
     call set_parse_span
     CHECK_ERROR (rri_done)
-    # Immediate code has no source-line identity: no fake public 0: header.
     call compile_physical_line
     CHECK_ERROR (rri_done)
     li a0, OP_HALT
     call emit_word
     CHECK_ERROR (rri_done)
+    lw t0, compile_has_line_control
+    bnez t0, rri_bind_stored
+rri_execute:
     la t0, bytecode_buf
     sw t0, pc_ptr, t1
     call vm_run
     j rri_done
-rri_bad:
-    call error_syntax
+
+rri_bind_stored:
+    # A line target cannot safely jump from an isolated temporary bytecode
+    # stream into stale offsets. Rebuild and compile stored source first, then
+    # append the already validated immediate line and start at that append
+    # point. line_numbers/line_offsets now belong to this same bytecode image.
+    call repl_build_program
+    CHECK_ERROR (rri_done)
+    call reset_runtime
+    la t0, program_buf
+    sw t0, source_ptr, t1
+    call compile_program
+    CHECK_ERROR (rri_done)
+    lw t0, bc_ptr
+    sw t0, 4(sp)
+    la a0, input_line
+    li a1, 256
+    call set_parse_span
+    CHECK_ERROR (rri_done)
+    call compile_physical_line
+    CHECK_ERROR (rri_done)
+    li a0, OP_HALT
+    call emit_word
+    CHECK_ERROR (rri_done)
+    lw t0, 4(sp)
+    sw t0, pc_ptr, t1
+    call vm_run
 rri_done:
     lw ra, 0(sp)
-    lw s4, 4(sp)
     addi sp, sp, 32
     ret
 # repl_line_count is ACTIVE count, not a high-water slot index.
@@ -2010,6 +2017,134 @@ compile_ask_return:
     addi sp, sp, 32
     ret
 compile_if:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    lw t0, parse_ptr
+    sw t0, 4(sp)
+    call consume_if
+    CHECK_ERROR (compile_sign_if_return)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_sign_if_bad_source)
+    lbu t1, 0(t0)
+    li t2, 40
+    bne t1, t2, compile_if_compatibility
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    # The mandatory outer parentheses belong to IF. Their contents use the
+    # one shared expression compiler and therefore emit the condition once.
+    call compile_expr
+    CHECK_ERROR (compile_sign_if_return)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_sign_if_bad_source)
+    lbu t1, 0(t0)
+    li t2, 41
+    bne t1, t2, compile_sign_if_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    sw zero, 12(sp)
+    sw zero, 16(sp)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_sign_if_return)
+    bnez a0, compile_sign_if_bad_source
+    li a0, 2
+    call parse_program_number
+    CHECK_ERROR (compile_sign_if_return)
+    sw a0, 8(sp)
+
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_sign_if_return)
+    bnez a0, compile_sign_if_emit
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_sign_if_bad_source)
+    lbu t1, 0(t0)
+    li t2, 44
+    bne t1, t2, compile_sign_if_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_sign_if_return)
+    bnez a0, compile_sign_if_bad_source
+    lw t0, parse_ptr
+    lbu t1, 0(t0)
+    li t2, 44
+    beq t1, t2, compile_sign_if_bad_source
+    li a0, 2
+    call parse_program_number
+    CHECK_ERROR (compile_sign_if_return)
+    sw a0, 12(sp)
+
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_sign_if_return)
+    bnez a0, compile_sign_if_emit
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_sign_if_bad_source)
+    lbu t1, 0(t0)
+    li t2, 44
+    bne t1, t2, compile_sign_if_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_sign_if_return)
+    bnez a0, compile_sign_if_bad_source
+    lw t0, parse_ptr
+    lbu t1, 0(t0)
+    li t2, 44
+    beq t1, t2, compile_sign_if_bad_source
+    li a0, 2
+    call parse_program_number
+    CHECK_ERROR (compile_sign_if_return)
+    sw a0, 16(sp)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_sign_if_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_sign_if_return)
+    beqz a0, compile_sign_if_bad_source
+
+compile_sign_if_emit:
+    li t0, 1
+    sw t0, compile_has_line_control, t1
+    li a0, OP_SIGN_BRANCH
+    call emit_word
+    CHECK_ERROR (compile_sign_if_return)
+    lw a0, 8(sp)
+    call emit_word
+    CHECK_ERROR (compile_sign_if_return)
+    lw a0, 12(sp)
+    call emit_word
+    CHECK_ERROR (compile_sign_if_return)
+    lw a0, 16(sp)
+    call emit_word
+    j compile_sign_if_return
+
+compile_if_compatibility:
+    # Frozen FR-12 owns the parenthesized form. Only a non-parenthesized IF
+    # can enter the isolated pre-stage-11 boolean compatibility parser.
+    lw t0, 4(sp)
+    sw t0, parse_ptr, t1
+    call compile_if_legacy
+    j compile_sign_if_return
+compile_sign_if_bad_source:
+    call error_syntax
+compile_sign_if_return:
+    lw ra, 0(sp)
+    addi sp, sp, 32
+    ret
+
+compile_if_legacy:
     ENTER_FRAME (16)
     sw ra, 0(sp)
     call consume_if
@@ -2041,6 +2176,8 @@ cif_then:
     call parse_program_number
     CHECK_ERROR (compile_if_return)
     sw a0, 4(sp)
+    li t0, 1
+    sw t0, compile_has_line_control, t1
     li a0, OP_JUMP_NZ
     call emit_word
     CHECK_ERROR (compile_if_return)
@@ -2057,6 +2194,8 @@ cif_goto:
     call parse_program_number
     CHECK_ERROR (compile_if_return)
     sw a0, 4(sp)
+    li t0, 1
+    sw t0, compile_has_line_control, t1
     li a0, OP_JUMP_NZ
     call emit_word
     CHECK_ERROR (compile_if_return)
@@ -2102,6 +2241,11 @@ compile_goto:
     CHECK_ERROR (compile_goto_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_goto_return)
+    li t0, 1
+    sw t0, compile_has_line_control, t1
+    call is_parse_statement_end
+    CHECK_ERROR (compile_goto_return)
+    bnez a0, compile_goto_first
     li a0, 0
     call parse_program_number
     CHECK_ERROR (compile_goto_return)
@@ -2110,6 +2254,11 @@ compile_goto:
     call emit_word
     CHECK_ERROR (compile_goto_return)
     lw a0, 4(sp)
+    call emit_word
+    CHECK_ERROR (compile_goto_return)
+    j compile_goto_return
+compile_goto_first:
+    li a0, OP_JUMP_FIRST
     call emit_word
     CHECK_ERROR (compile_goto_return)
 compile_goto_return:
@@ -2974,6 +3123,14 @@ safety_near_31:
     bne s1, t1, safety_near_32
     j vm_jump_abs
 safety_near_32:
+    li t1, OP_SIGN_BRANCH
+    bne s1, t1, vm_not_sign_branch
+    j vm_sign_branch
+vm_not_sign_branch:
+    li t1, OP_JUMP_FIRST
+    bne s1, t1, vm_not_jump_first
+    j vm_jump_first
+vm_not_jump_first:
     li t1, OP_PRINT_S
     bne s1, t1, safety_near_33
     j vm_print_s
@@ -3314,6 +3471,44 @@ vm_jump_abs:
     call fetch_word
     CHECK_ERROR (vm_run_return)
     call set_pc_absolute
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_sign_branch:
+    # Fetch the complete conditional instruction before touching the stack.
+    # Zero operands encode the omitted trailing branches and mean fall-through.
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    sw a0, 16(sp)
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    sw a0, 20(sp)
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    sw a0, 24(sp)
+    call vm_pop_ft0
+    CHECK_ERROR (vm_run_return)
+    call type_validate_finite_ft0
+    CHECK_ERROR (vm_run_return)
+    la t0, zero_f
+    flw ft1, 0(t0)
+    feq.s t0, ft0, ft1
+    bnez t0, vm_sign_zero
+    flt.s t0, ft0, ft1
+    bnez t0, vm_sign_negative
+    lw a0, 24(sp)
+    j vm_sign_selected
+vm_sign_negative:
+    lw a0, 16(sp)
+    j vm_sign_selected
+vm_sign_zero:
+    lw a0, 20(sp)
+vm_sign_selected:
+    beqz a0, vm_loop
+    call set_pc_to_line
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_jump_first:
+    call set_pc_to_first_line
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_print_s:
@@ -4080,6 +4275,19 @@ symbol_store_ft0_return:
     lw s2, 12(sp)
     addi sp, sp, 48
     ret
+set_pc_to_first_line:
+    lw t0, line_count
+    li t1, MAX_LINES
+    bgtu t0, t1, sptf_bad_count
+    beqz t0, sptf_missing
+    lw a0, line_numbers
+    j set_pc_to_line
+sptf_bad_count:
+    j error_lines
+sptf_missing:
+    li a0, ERR_LINES
+    la a1, err_line
+    j set_error
 set_pc_to_line:
     ENTER_FRAME (16)
     sw ra, 0(sp)
@@ -4544,6 +4752,7 @@ require_ask_input_end_bad:
 # excluding keys ending in 00. No floating point is used for source numbers.
 # a0=0: line number (temporary legacy integer ordinal allowed, 1..9801);
 # a0=1: WRITE selector (bare integer is group, never a legacy line alias).
+# a0=2: normative IF target (composite required; comma is a valid delimiter).
 # Result a0=key, a1=2 exact line / 1 group; parse_ptr advances on success only.
 parse_program_number:
     CHECK_ERROR (safety_return)
@@ -4609,6 +4818,8 @@ pn_key:
     li a1, 2
     j pn_delimiter
 pn_integer:
+    li t6, 2
+    beq a2, t6, error_number
     beqz a2, pn_legacy
     li t6, 99
     bgtu t2, t6, error_number
@@ -4642,6 +4853,11 @@ pn_delimiter:
     beq t0, t6, pn_ok
     li t6, 13
     beq t0, t6, pn_ok
+    li t6, 44
+    bne t0, t6, pn_not_target_comma
+    li t6, 2
+    beq a2, t6, pn_ok
+pn_not_target_comma:
     li t6, 59
     beq t0, t6, pn_ok
     li t6, 58

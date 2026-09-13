@@ -18,8 +18,8 @@ A = 14.0
 
 - FOCAL-команда без номера — немедленное выполнение команды;
 - `RUN` — команда среды: компиляция хранимых строк и запуск VM;
-- `G` / `GO` / `GOTO` — FOCAL-операторы; без аргумента в REPL запускают программу,
-  с аргументом идут в прежний разбор GOTO, а не перехватываются как `RUN`;
+- `G` / `GO` / `GOTO [g.ll]` — FOCAL-переход: без цели передаёт управление
+  первой хранимой строке, с целью — указанной composite-строке;
 - `LIST` — вывод текущего буфера программы;
 - `WRITE` / `W` — просмотр всего исходника; `ALL`, группа или номер строки
   выбирают весь исходник, группу или одну строку соответственно;
@@ -39,7 +39,8 @@ A = 14.0
 SET/S, TYPE/T, ASK/A, GOTO/G/GO, IF/I, FOR/F, DO/D, RETURN/R, QUIT/Q, COMMENT/C,
 WRITE/W. Самостоятельные DO/RETURN пока дают явную ошибку E13
 «recognized statement not implemented yet»; их семантика относится к следующим
-этапам. Прежний внутристрочный DO в старой грамматике IF/FOR сохранён.
+этапам. Нормативный `IF/I` является sign-IF; прежний внутристрочный DO доступен
+только в явно отделённой непарентезированной compatibility-грамматике IF/FOR.
 RUN, LIST, LOAD, SAVE и immediate execution сами по себе не очищают переменные.
 
 Строки можно вводить в любом порядке. Повторный ввод номера заменяет строку,
@@ -186,8 +187,8 @@ py -3 -B -m unittest discover -s tests/rars_safety -p "test_*.py" -v
 $LASTEXITCODE
 ```
 
-Успех: `Ran 15 tests`, `OK`, код 0. Это 73 реальных запуска RARS:
-51 низкоуровневый subtest, один ABI harness, 16 batch/REPL-сценариев и пять
+Успех: `Ran 15 tests`, `OK`, код 0. Это 79 реальных запусков RARS:
+57 низкоуровневых subtests, один ABI harness, 16 batch/REPL-сценариев и пять
 ASK nested-evaluator harness-сценариев.
 Harness добавляет только входную точку и тестовые данные во временную копию
 целевого ASM и вызывает его процедуры. Python не реализует семантику FOCAL
@@ -508,6 +509,62 @@ preservation и immediate/stored/LOAD/batch paths. Safety suite дополнит
 проверяет operands/underflow, границы input buffer, нехватку bytecode, cleanup
 pc/bc/parser/stack на success/error и повторное использование временного кода.
 Python остаётся только драйвером и проверяет stdin/stdout/files.
+
+## GOTO и исторический sign-IF (этап 11)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_control -p "test_*.py" -v
+```
+
+Нормативная грамматика безусловного перехода — `GOTO [g.ll]`; `G` и `GO`
+являются только точными aliases. Цель разбирается общим composite-number parser:
+`1.1` означает `1.10`, а `2.01` и `2.10` различны; `xx.00` недопустим.
+Отсутствующая цель передаёт управление строке с наименьшим canonical key.
+Это именно переход внутри текущего VM execution, а не рекурсивный `RUN`.
+
+Нормативный условный переход имеет вид
+`IF (expression) negative[,zero[,positive]]`; точное сокращение — `I`.
+Скобки обязательны. Выражение компилируется общим `compile_expr` ровно один раз,
+а VM выбирает ветвь по знаку конечного Float32 без integer conversion. `+0.0` и
+`-0.0` выбирают zero branch; NaN/∞ согласованно с arithmetic model дают E15.
+При одной цели определена только отрицательная ветвь, при двух — отрицательная
+и нулевая, при трёх — все три. Любая отсутствующая trailing-ветвь означает
+обычный fall-through к следующему оператору той же физической строки или к
+следующей строке. Четвёртая цель и malformed comma list дают E10.
+
+Компилятор выдаёт `OP_SIGN_BRANCH` с тремя canonical keys; нулевой operand —
+внутренний sentinel отсутствующей ветви. VM сначала полностью считывает opcode,
+затем один раз снимает условие со стека и разрешает только выбранный ненулевой
+key. Поэтому отсутствующая выбранная строка даёт E08, а отсутствующие цели в
+невыбранных ветвях не мешают выполнению. `OP_JUMP` хранит один canonical key,
+а `OP_JUMP_FIRST` реализует форму без цели. Оба перехода используют уже
+построенные `line_numbers`/`line_offsets`; исходный текст во время перехода не
+сканируется и программа повторно не компилируется. Двухфазная сортировка строк
+делает forward/backward targets независимыми от порядка ввода.
+
+Immediate physical line сначала целиком компилируется без исполнения. Если она
+содержит line-control, stored source компилируется в тот же bytecode image, а
+проверенная immediate line добавляется в его хвост и запускается оттуда. Это
+позволяет `GOTO g.ll`, immediate sign-IF и `GO;...` безопасно переходить в
+stored program без stale offsets и сохраняет compile-before-run atomicity.
+После перехода остаток прежнего execution path естественно не исполняется.
+QUIT, ASK values, symbols и persistent TYPE format сохраняют прежний runtime
+contract; LOAD по-прежнему только меняет storage.
+
+Старый boolean `IF expr THEN/GOTO/DO ...` не является FR-12. Он сохранён только
+как изолированный compatibility path для непарентезированной формы; любой
+`IF (` безусловно разбирается нормативным sign-IF parser. Legacy integer targets
+остаются прежней миграцией и не расширяют composite grammar новых тестов.
+
+Dedicated suite выполняет настоящий RARS с exact stdout и покрывает forward и
+backward GOTO, loop, aliases/case, composite identity, unordered input,
+semicolon/QUIT, no-target, immediate/stored/LOAD/batch, E08 и source
+preservation; для IF — три знака, оба signed zero, 1/2/3 targets и fall-through,
+expressions/symbols/index/functions, ASK/TYPE state, malformed syntax, выбранные
+и невыбранные missing targets, E15 recovery и atomicity. Low-level safety suite
+проверяет усечённый conditional opcode, stack underflow, corrupted selected key,
+повреждённые line offsets и absolute jump до/после/между границами wordcode.
+Python остаётся только драйвером, generator fixtures и механизмом assertions.
 
 ## Ограничения
 
