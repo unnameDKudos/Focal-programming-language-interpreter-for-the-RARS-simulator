@@ -120,7 +120,23 @@ mv a0, t0
 call repl_store_line
 """ + error_is("ERR_LINES"),
     "invalid_repl_slot": "li a0, 128\ncall repl_text_addr\n" + error_is("ERR_LINES"),
-    "array_bounds": "li t2, 0\nli t3, 100\ncall array_addr\n" + error_is("ERR_ARRAY"),
+    "symbol_missing_lookup_no_allocation": """
+li a0, 65
+li a1, 0
+li a2, 0
+call symbol_find
+bnez a0, test_fail
+lw t0, symbol_count
+bnez t0, test_fail
+""" + error_is("0"),
+    "symbol_compile_does_not_allocate": """
+la a0, test_symbol_source
+li a1, 32
+call set_parse_span
+call compile_physical_line
+lw t0, symbol_count
+bnez t0, test_fail
+""" + error_is("0"),
     "missing_operand": "li a0, OP_PUSH_F\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
     "expression_opcode_safety": """
 li a0, OP_PUSH_BITS
@@ -166,7 +182,20 @@ call vm_run
 """ + error_is("ERR_VM_UNDERFLOW"),
     "unknown_opcode": "li a0, 999\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
     "malformed_string_operand": "li a0, OP_PRINT_S\ncall emit_word\nli a0, 1\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_STRING"),
-    "malformed_variable_operand": "li a0, OP_PUSH_V\ncall emit_word\nli a0, 26\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_ARRAY"),
+    "malformed_symbol_operand": "li a0, OP_PUSH_V\ncall emit_word\nli a0, 26\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_ARRAY"),
+    "malformed_indexed_symbol_operand": """
+fmv.w.x ft0, zero
+call vm_push_ft0
+li a0, OP_PUSH_ARR
+call emit_word
+li a0, 26
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_ARRAY"),
     "bad_absolute_jump": "li a0, OP_JUMP_ABS\ncall emit_word\nli a0, 1\ncall emit_word\nla t0, bytecode_buf\nsw t0, pc_ptr, t1\ncall vm_run\n" + error_is("ERR_BC_ACCESS"),
     "procedural_stack_guard": "mv t0, sp\nsw t0, proc_stack_floor, t1\ncall compile_program\n" + error_is("ERR_PROC_STACK"),
 }
@@ -185,8 +214,107 @@ CASES.update({
     "corrupt_line_lookup_count": "li t0, -1\nsw t0, line_count, t1\nli a0, 1\ncall set_pc_to_line\n" + error_is("ERR_LINES"),
     "corrupt_repl_lookup_count": "li t0, -1\nsw t0, repl_line_count, t1\ncall repl_find_line\n" + error_is("ERR_LINES"),
     "last_repl_slot": "li a0, 127\ncall repl_text_addr\nla t0, repl_texts_end\naddi t0, t0, -128\nbne a0, t0, test_fail\n" + error_is("0"),
-    "negative_array_index": "li t2, 0\nli t3, -1\ncall array_addr\n" + error_is("ERR_ARRAY"),
-    "last_array_element": "li t2, 25\nli t3, 99\ncall array_addr\nla t0, arrays_end\naddi t0, t0, -4\nbne a0, t0, test_fail\n" + error_is("0"),
+    "index_nearest_even": """
+li t0, 0x3fc00000
+fmv.w.x ft0, t0
+call index_from_ft0
+li t0, 2
+bne a0, t0, test_fail
+li t0, 0x40200000
+fmv.w.x ft0, t0
+call index_from_ft0
+li t0, 2
+bne a0, t0, test_fail
+li t0, 0xbfc00000
+fmv.w.x ft0, t0
+call index_from_ft0
+li t0, -2
+bne a0, t0, test_fail
+li t0, 0xc0200000
+fmv.w.x ft0, t0
+call index_from_ft0
+li t0, -2
+bne a0, t0, test_fail
+""" + error_is("0"),
+    "invalid_index_conversion": """
+li t0, 0x7f800000
+fmv.w.x ft0, t0
+call index_from_ft0
+""" + error_is("ERR_ARRAY"),
+    "symbol_capacity_and_atomic_failure": """
+la t0, symbol_table_end
+li t1, 0x12345678
+sw t1, 0(t0)
+li s0, 0
+symbol_fill_loop:
+li a0, 65
+li a1, 1
+mv a2, s0
+fcvt.s.w ft0, s0
+call symbol_store_ft0
+lw t0, error_code
+bnez t0, test_fail
+addi s0, s0, 1
+li t0, SYMBOL_MAX
+blt s0, t0, symbol_fill_loop
+lw t0, symbol_count
+li t1, SYMBOL_MAX
+bne t0, t1, test_fail
+la t0, symbol_table_end
+lw t1, 0(t0)
+li t2, 0x12345678
+bne t1, t2, test_fail
+li t0, 0x41100000
+fmv.w.x ft0, t0
+li a0, 66
+li a1, 0
+li a2, 0
+call symbol_store_ft0
+""" + error_is("ERR_ARRAY") + """
+lw t0, symbol_count
+li t1, SYMBOL_MAX
+bne t0, t1, test_fail
+la t0, symbol_table_end
+lw t1, 0(t0)
+li t2, 0x12345678
+bne t1, t2, test_fail
+lw t0, -16(t0)
+li t1, 65
+bne t0, t1, test_fail
+call reset_runtime
+li t0, 0x44424000
+fmv.w.x ft0, t0
+li a0, 65
+li a1, 1
+li a2, 0
+call symbol_store_ft0
+lw t0, symbol_count
+li t1, SYMBOL_MAX
+bne t0, t1, test_fail
+li a0, 65
+li a1, 1
+li a2, 0
+call symbol_load_ft0
+fmv.x.w t0, ft0
+li t1, 0x44424000
+bne t0, t1, test_fail
+""" + error_is("0"),
+    "corrupt_symbol_count": """
+li t0, -1
+sw t0, symbol_count, t1
+la t0, symbol_table_end
+li t1, 0x76543210
+sw t1, 0(t0)
+li a0, 65
+li a1, 0
+li a2, 0
+call symbol_find
+""" + error_is("ERR_ARRAY") + """
+la t0, symbol_table_end
+lw t1, 0(t0)
+li t2, 0x76543210
+bne t1, t2, test_fail
+""",
     "invalid_parse_pointer": "la a0, test_string\nli a1, 4\ncall set_parse_span\nli t0, 1\nsw t0, parse_ptr, t1\ncall compile_expr\n" + error_is("ERR_SYNTAX"),
     "sticky_error_and_reset": "call vm_pop_ft0\ncall emit_word\ncall error_string\n" + error_is("ERR_VM_UNDERFLOW") + pointer_is("bc_ptr", "bytecode_buf") + "call reset_runtime\n" + error_is("0") + pointer_is("vm_sp_ptr", "vm_stack") + pointer_is("pc_ptr", "bytecode_buf") + pointer_is("str_pool_ptr", "str_pool"),
     "nested_stack_unwind": "la a0, test_string\nli a1, 4\ncall set_parse_span\naddi t0, sp, -32\nsw t0, proc_stack_floor, t1\ncall compile_expr\n" + error_is("ERR_PROC_STACK"),
@@ -225,7 +353,11 @@ test_fail:
 """
         target = self.source.replace("\nmain:\n", "\nfocal_main:\n", 1)
         target = target.replace("\n.text\n", entry + "\n.text\n", 1)
-        return target + '\n.data\n.align 2\ntest_sp: .word 0\ntest_pass_message: .asciz "PASS\\n"\ntest_fail_message: .asciz "FAIL\\n"\ntest_string: .asciz "\\\"x\\\""\n'
+        return target + ('\n.data\n.align 2\ntest_sp: .word 0\n'
+                         'test_pass_message: .asciz "PASS\\n"\n'
+                         'test_fail_message: .asciz "FAIL\\n"\n'
+                         'test_string: .asciz "\\\"x\\\""\n'
+                         'test_symbol_source: .asciz "SET ALPHA=1"\n')
 
     def execute(self, source, expected, stdin=None, files=None):
         if stdin is not None:
@@ -248,7 +380,7 @@ test_fail:
                 self.execute(self.harness(body), "PASS\n")
 
     def test_repl_recovers_and_keeps_source(self):
-        commands = '1 TYPE "KEEP",!\nTYPE A(100),!\nTYPE "AFTER",!\nLIST\nQUIT\n'
+        commands = '1 TYPE "KEEP",!\nTYPE A(1E10),!\nTYPE "AFTER",!\nLIST\nQUIT\n'
         expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n> > '
                     'FOCAL/RARS error [E09]: variable/array bounds\n'
                     '> AFTER\n> 1.01 TYPE "KEEP",!\n> ')
@@ -357,8 +489,8 @@ test_fail:
         self.execute(self.source,
                      'FOCAL/RARS REPL. Enter HELP for commands.\n> > > '
                      'FOCAL/RARS error [E09]: variable/array bounds\n> 7.0\n'
-                     '> 1.01 SET A=7\n1.02 TYPE A(100),!\n> ',
-                     '1 SET A=7\n2 TYPE A(100),!\nRUN\nTYPE A,!\nLIST\nQUIT\n')
+                     '> 1.01 SET A=7\n1.02 TYPE A(1E10),!\n> ',
+                     '1 SET A=7\n2 TYPE A(1E10),!\nRUN\nTYPE A,!\nLIST\nQUIT\n')
 
 
 if __name__ == "__main__":

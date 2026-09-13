@@ -105,7 +105,7 @@ expr_bits_fail:
         self.execute(source, "PASS\n")
 
     def test_malformed_literals_are_controlled_and_recover(self):
-        for literal in [".", "E3", "1E", "1E+", "1E-", "1.2.3", "1EE2"]:
+        for literal in [".", "1E", "1E+", "1E-", "1.2.3", "1EE2"]:
             with self.subTest(literal=literal):
                 self.session([
                     (f"TYPE {literal},!", SYNTAX),

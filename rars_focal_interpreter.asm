@@ -115,7 +115,8 @@ safety_near_7:
 .eqv OP_WRITE      68
 .eqv MAX_LINES     128
 .eqv LINE_LEN      128
-.eqv ARRAY_LEN     100
+.eqv SYMBOL_MAX    512
+.eqv SYMBOL_ENTRY_SIZE 16
 .data
     .align 2
 focal_program:
@@ -136,10 +137,9 @@ str_pool_ptr:   .word 0
 line_count:     .word 0
 repl_enabled:   .word 1
 repl_line_count:.word 0
-vars:           .space 104
-vars_end:
-arrays:         .space 10400
-arrays_end:
+symbol_count:   .word 0
+symbol_table:   .space 8192
+symbol_table_end:
 line_numbers:   .space 512
 line_numbers_end:
 line_offsets:   .space 512
@@ -176,6 +176,9 @@ one_f:          .float 1.0
 neg_one_f:      .float -1.0
 ten_f:          .float 10.0
 tenth_f:        .float 0.1
+half_f:         .float 0.5
+index_upper_f:  .float 2147483648.0
+index_lower_f:  .float -2147483648.0
 err_unknown:    .asciz "FOCAL/RARS error [E10]: unknown statement\n"
 err_line:       .asciz "FOCAL/RARS error [E08]: line not found\n"
 repl_banner:    .asciz "FOCAL/RARS REPL. Enter HELP for commands.\n"
@@ -184,7 +187,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer aliases remain temporary; identifiers and IF/FOR remain legacy.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO     FOCAL jump; no argument runs stored program\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer line aliases and IF/FOR control flow remain compatibility paths.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -438,10 +441,11 @@ rcp_loop:
     j rcp_loop
 rcp_done:
     ret
-# ERASE is the only command that clears both scalar and indexed variables.
+# ERASE is the only command that clears persistent scalar/indexed symbols.
 clear_variables:
-    la t0, vars
-    la t1, arrays_end
+    sw zero, symbol_count, t0
+    la t0, symbol_table
+    la t1, symbol_table_end
 cv_loop:
     bgeu t0, t1, cv_done
     sw zero, 0(t0)
@@ -1948,6 +1952,7 @@ compile_for:
     CHECK_ERROR (compile_for_return)
     call parse_variable_ref
     CHECK_ERROR (compile_for_return)
+    bnez a1, compile_for_bad_source
     sw a0, 4(sp)
     call skip_parse_spaces
     CHECK_ERROR (compile_for_return)
@@ -2044,6 +2049,9 @@ compile_for:
     mv a1, t1
     call patch_word
     CHECK_ERROR (compile_for_return)
+    j compile_for_return
+compile_for_bad_source:
+    call error_syntax
 compile_for_return:
     lw ra, 0(sp)
     addi sp, sp, 32
@@ -2584,56 +2592,89 @@ pfl_bad:
 pfl_math:
     j error_math
 parse_variable_ref:
-    ENTER_FRAME (16)
+    ENTER_FRAME (32)
     sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
     call skip_parse_spaces
     CHECK_ERROR (parse_variable_ref_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, parse_variable_ref_bad_source)
-    lbu t2, 0(t1)
-    li t3, 97
-    blt t2, t3, pvr_upper
-    li t3, 122
-    bgt t2, t3, pvr_upper
-    addi t2, t2, -97
-    j pvr_index_ready
-pvr_upper:
-    addi t2, t2, -65
-pvr_index_ready:
-    li t6, 26
-    bgeu t2, t6, parse_variable_ref_bad_source
-    sw t2, 4(sp)
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    lw s1, parse_ptr
+    CHECK_PARSE (s1, parse_variable_ref_bad_source)
+    lbu t0, 0(s1)
+    li t1, 97
+    bltu t0, t1, pvr_first_upper
+    li t1, 122
+    bgtu t0, t1, parse_variable_ref_bad_source
+    addi t0, t0, -32
+    j pvr_first_ready
+pvr_first_upper:
+    li t1, 65
+    bltu t0, t1, parse_variable_ref_bad_source
+    li t1, 90
+    bgtu t0, t1, parse_variable_ref_bad_source
+pvr_first_ready:
+    # FR-20 reserves every user identifier beginning with F.
+    li t1, 70
+    beq t0, t1, parse_variable_ref_bad_source
+    mv s0, t0
+    addi s1, s1, 1
+    li s2, 1
+pvr_scan:
+    CHECK_PARSE (s1, parse_variable_ref_bad_source)
+    lbu t0, 0(s1)
+    li t1, 48
+    bltu t0, t1, pvr_scan_letter
+    li t1, 57
+    bleu t0, t1, pvr_scan_char_ready
+pvr_scan_letter:
+    li t1, 65
+    bltu t0, t1, pvr_scan_lower
+    li t1, 90
+    bleu t0, t1, pvr_scan_char_ready
+pvr_scan_lower:
+    li t1, 97
+    bltu t0, t1, pvr_name_done
+    li t1, 122
+    bgtu t0, t1, pvr_name_done
+    addi t0, t0, -32
+pvr_scan_char_ready:
+    # Consume the complete token but retain only its first two characters.
+    li t1, 1
+    bne s2, t1, pvr_scan_next
+    slli t0, t0, 8
+    or s0, s0, t0
+pvr_scan_next:
+    addi s2, s2, 1
+    addi s1, s1, 1
+    j pvr_scan
+pvr_name_done:
+    sw s1, parse_ptr, t0
     call skip_parse_spaces
     CHECK_ERROR (parse_variable_ref_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, parse_variable_ref_bad_source)
-    lbu t2, 0(t1)
-    li t3, 40
-    bne t2, t3, pvr_scalar
-    addi t1, t1, 1
-    sw t1, 0(t0)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, parse_variable_ref_bad_source)
+    lbu t1, 0(t0)
+    li t2, 40
+    bne t1, t2, pvr_scalar
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
     call compile_expr
     CHECK_ERROR (parse_variable_ref_return)
     call skip_parse_spaces
     CHECK_ERROR (parse_variable_ref_return)
-    la t0, parse_ptr
-    lw t1, 0(t0)
-    CHECK_PARSE (t1, parse_variable_ref_bad_source)
-    CHECK_PARSE (t1, parse_variable_ref_bad_source)
-    lbu t2, 0(t1)
-    li t3, 41
-    bne t2, t3, parse_variable_ref_bad_source
-    addi t1, t1, 1
-    sw t1, 0(t0)
-    lw a0, 4(sp)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, parse_variable_ref_bad_source)
+    lbu t1, 0(t0)
+    li t2, 41
+    bne t1, t2, parse_variable_ref_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    mv a0, s0
     li a1, 1
     j pvr_done
 pvr_scalar:
-    lw a0, 4(sp)
+    mv a0, s0
     li a1, 0
 pvr_done:
     j parse_variable_ref_return
@@ -2641,7 +2682,10 @@ parse_variable_ref_bad_source:
     call error_syntax
 parse_variable_ref_return:
     lw ra, 0(sp)
-    addi sp, sp, 16
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 32
     ret
 vm_run:
     ENTER_FRAME (32)
@@ -2795,56 +2839,57 @@ vm_push_bits:
 vm_push_v:
     call fetch_word
     CHECK_ERROR (vm_run_return)
-    call check_variable
+    li a1, 0
+    li a2, 0
+    call symbol_load_ft0
     CHECK_ERROR (vm_run_return)
-    slli t0, a0, 2
-    la t1, vars
-    add t1, t1, t0
-    flw ft0, 0(t1)
     call vm_push_ft0
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_store_v:
     call fetch_word
     CHECK_ERROR (vm_run_return)
-    call check_variable
-    CHECK_ERROR (vm_run_return)
-    mv t2, a0
+    mv s2, a0
     call vm_pop_ft0
     CHECK_ERROR (vm_run_return)
-    slli t0, t2, 2
-    la t1, vars
-    add t1, t1, t0
-    fsw ft0, 0(t1)
+    mv a0, s2
+    li a1, 0
+    li a2, 0
+    call symbol_store_ft0
+    CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_push_arr:
     call fetch_word
     CHECK_ERROR (vm_run_return)
-    call check_variable
-    CHECK_ERROR (vm_run_return)
-    mv t2, a0
+    mv s2, a0
     call vm_pop_ft0
     CHECK_ERROR (vm_run_return)
-    fcvt.w.s t3, ft0
-    call array_addr
+    call index_from_ft0
     CHECK_ERROR (vm_run_return)
-    flw ft0, 0(a0)
+    mv a2, a0
+    mv a0, s2
+    li a1, 1
+    call symbol_load_ft0
+    CHECK_ERROR (vm_run_return)
     call vm_push_ft0
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_store_arr:
     call fetch_word
     CHECK_ERROR (vm_run_return)
-    call check_variable
-    CHECK_ERROR (vm_run_return)
-    mv t2, a0
+    mv s2, a0
     call vm_pop2
     CHECK_ERROR (vm_run_return)
-    fmv.s ft2, ft0
-    fcvt.w.s t3, ft1
-    call array_addr
+    fsw ft0, 16(sp)
+    fmv.s ft0, ft1
+    call index_from_ft0
     CHECK_ERROR (vm_run_return)
-    fsw ft2, 0(a0)
+    mv a2, a0
+    mv a0, s2
+    li a1, 1
+    flw ft0, 16(sp)
+    call symbol_store_ft0
+    CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_add:
     call vm_pop2
@@ -3246,22 +3291,191 @@ push_bool_t0_return:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
-array_addr:
+# Convert a Float32 indexed-variable subscript to signed int32 using the
+# normative nearest-even rule. NaN, infinities and values outside the safe
+# conversion interval are rejected before fcvt, so RARS never traps/saturates.
+# The tie rule is implemented explicitly because it must not depend on frm.
+index_from_ft0:
     CHECK_ERROR (safety_return)
-    li t6, 26
-    bltu t2, t6, safety_near_53
-    j error_array
-safety_near_53:
-    li t6, ARRAY_LEN
-    bltu t3, t6, safety_near_54
-    j error_array
-safety_near_54:
-    li t0, ARRAY_LEN
-    mul t1, t2, t0
-    add t1, t1, t3
-    slli t1, t1, 2
-    la a0, arrays
-    add a0, a0, t1
+    fmv.x.w t0, ft0
+    slli t1, t0, 1
+    srli t1, t1, 1
+    srli t2, t1, 23
+    li t3, 255
+    beq t2, t3, error_array
+    la t0, index_upper_f
+    flw ft1, 0(t0)
+    flt.s t1, ft0, ft1
+    beqz t1, error_array
+    la t0, index_lower_f
+    flw ft1, 0(t0)
+    flt.s t1, ft0, ft1
+    bnez t1, error_array
+    fcvt.w.s a0, ft0, rtz
+    fcvt.s.w ft1, a0
+    fsub.s ft2, ft0, ft1
+    fsgnjx.s ft2, ft2, ft2
+    la t0, half_f
+    flw ft3, 0(t0)
+    flt.s t0, ft3, ft2
+    bnez t0, ift_adjust
+    feq.s t0, ft2, ft3
+    beqz t0, safety_return
+    andi t0, a0, 1
+    beqz t0, safety_return
+ift_adjust:
+    la t0, zero_f
+    flw ft1, 0(t0)
+    flt.s t0, ft0, ft1
+    bnez t0, ift_negative
+    addi a0, a0, 1
+    ret
+ift_negative:
+    addi a0, a0, -1
+    ret
+
+# Canonical variable key: uppercase first character in bits 0..7 and optional
+# uppercase letter/digit second character in bits 8..15. Higher bits are zero.
+validate_symbol_key:
+    CHECK_ERROR (safety_return)
+    srli t0, a0, 16
+    bnez t0, error_array
+    andi t0, a0, 255
+    li t1, 65
+    bltu t0, t1, error_array
+    li t1, 90
+    bgtu t0, t1, error_array
+    li t1, 70
+    beq t0, t1, error_array
+    srli t0, a0, 8
+    andi t0, t0, 255
+    beqz t0, safety_return
+    li t1, 48
+    bltu t0, t1, vsk_letter
+    li t1, 57
+    bleu t0, t1, safety_return
+vsk_letter:
+    li t1, 65
+    bltu t0, t1, error_array
+    li t1, 90
+    bgtu t0, t1, error_array
+    ret
+
+# a0=name key, a1=0 scalar/1 indexed, a2=integer index.
+# Returns a0=entry address or zero. Missing lookup never allocates.
+symbol_find:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    mv s0, a0
+    mv s1, a1
+    mv s2, a2
+    call validate_symbol_key
+    CHECK_ERROR (symbol_find_return)
+    li t0, 2
+    bgeu s1, t0, symbol_find_bad
+    bnez s1, sf_count
+    li s2, 0
+sf_count:
+    lw s3, symbol_count
+    li t0, SYMBOL_MAX
+    bgtu s3, t0, symbol_find_bad
+    la t0, symbol_table
+    li t1, 0
+sf_loop:
+    bgeu t1, s3, sf_missing
+    lw t2, 0(t0)
+    bne t2, s0, sf_next
+    lw t2, 4(t0)
+    bne t2, s1, sf_next
+    beqz s1, sf_found
+    lw t2, 8(t0)
+    beq t2, s2, sf_found
+sf_next:
+    addi t0, t0, SYMBOL_ENTRY_SIZE
+    addi t1, t1, 1
+    j sf_loop
+sf_found:
+    mv a0, t0
+    j symbol_find_return
+sf_missing:
+    li a0, 0
+    j symbol_find_return
+symbol_find_bad:
+    call error_array
+symbol_find_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    addi sp, sp, 32
+    ret
+
+# Same key contract as symbol_find. Missing values retain historical zero-read
+# behavior and do not consume one of the 512 persistent entries.
+symbol_load_ft0:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    call symbol_find
+    CHECK_ERROR (symbol_load_ft0_return)
+    beqz a0, slf_missing
+    flw ft0, 12(a0)
+    j symbol_load_ft0_return
+slf_missing:
+    fmv.w.x ft0, zero
+symbol_load_ft0_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# Find-or-create happens only at runtime STORE. Count is committed last, and a
+# full table still permits replacement of an existing scalar/indexed element.
+symbol_store_ft0:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    mv s0, a0
+    mv s1, a1
+    mv s2, a2
+    fsw ft0, 16(sp)
+    call symbol_find
+    CHECK_ERROR (symbol_store_ft0_return)
+    beqz a0, ssf_create
+    flw ft0, 16(sp)
+    fsw ft0, 12(a0)
+    j symbol_store_ft0_return
+ssf_create:
+    lw t0, symbol_count
+    li t1, SYMBOL_MAX
+    bgeu t0, t1, ssf_full
+    slli t1, t0, 4
+    la t2, symbol_table
+    add t2, t2, t1
+    la t3, symbol_table_end
+    addi t4, t2, SYMBOL_ENTRY_SIZE
+    bgtu t4, t3, ssf_full
+    sw s0, 0(t2)
+    sw s1, 4(t2)
+    sw s2, 8(t2)
+    flw ft0, 16(sp)
+    fsw ft0, 12(t2)
+    addi t0, t0, 1
+    sw t0, symbol_count, t1
+    j symbol_store_ft0_return
+ssf_full:
+    call error_array
+symbol_store_ft0_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 48
     ret
 set_pc_to_line:
     ENTER_FRAME (16)
@@ -3515,6 +3729,10 @@ ck_done:
 consume_equal:
     la t0, parse_ptr
     lw t1, 0(t0)
+    CHECK_PARSE (t1, error_syntax)
+    lbu t2, 0(t1)
+    li t3, 61
+    bne t2, t3, error_syntax
     addi t1, t1, 1
     CHECK_PARSE (t1, error_syntax)
     sw t1, 0(t0)
@@ -3522,6 +3740,10 @@ consume_equal:
 consume_comma:
     la t0, parse_ptr
     lw t1, 0(t0)
+    CHECK_PARSE (t1, error_syntax)
+    lbu t2, 0(t1)
+    li t3, 44
+    bne t2, t3, error_syntax
     addi t1, t1, 1
     CHECK_PARSE (t1, error_syntax)
     sw t1, 0(t0)
@@ -3615,12 +3837,6 @@ error_math:
     li a0, ERR_MATH
     la a1, msg_math
     j set_error
-
-check_variable:
-    CHECK_ERROR (safety_return)
-    li t6, 26
-    bgeu a0, t6, error_array
-    ret
 check_pool_string:
     CHECK_ERROR (safety_return)
     la t0, str_pool

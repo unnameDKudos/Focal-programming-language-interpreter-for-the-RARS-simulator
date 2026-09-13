@@ -186,8 +186,8 @@ py -3 -B -m unittest discover -s tests/rars_safety -p "test_*.py" -v
 $LASTEXITCODE
 ```
 
-Успех: `Ran 13 tests`, `OK`, код 0. Это 56 реальных запусков RARS:
-39 низкоуровневых subtests, один ABI harness и 16 batch/REPL-сценариев.
+Успех: `Ran 13 tests`, `OK`, код 0. Это 60 реальных запусков RARS:
+43 низкоуровневых subtests, один ABI harness и 16 batch/REPL-сценариев.
 Harness добавляет только входную точку и тестовые данные во временную копию
 целевого ASM и вызывает его процедуры. Python не реализует семантику FOCAL
 и не является нормативным oracle. Эти проверки ресурсов не засчитываются
@@ -195,7 +195,7 @@ Harness добавляет только входную точку и тесто�
 
 Проверяются границы wordcode (emit/fetch/patch/jump), 512-элементного VM-стека
 (включая атомарный pop2), строкового пула, program_buf, input_line, 128 записей
-таблиц/REPL slots, адресации переменных/массивов, сохранение sp и s0–s11,
+таблиц/REPL slots, единой symbol table, сохранение sp и s0–s11,
 sticky-ошибка, сброс временного состояния и восстановление REPL.
 Проверены отказ при слишком глубокой компиляции и сохранение исходных строк
 после ошибок RUN/LOAD; значения уже присвоенных переменных не откатываются.
@@ -372,6 +372,41 @@ Suite использует настоящий RARS и exact stdout, провер
 нестандартные приоритеты, unary restrictions, brackets/functions, compile/runtime
 recovery и общий immediate/stored/LOAD/batch path. Python остаётся драйвером,
 не parser или semantic oracle.
+
+## Таблица символов и индексированные переменные (этап 8)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_symbols -p "test_*.py" -v
+```
+
+Идентификатор по FR-20 начинается с латинской буквы и продолжается латинскими
+буквами или цифрами. Parser потребляет имя целиком, но canonical key состоит из
+первых двух символов в верхнем ASCII-регистре; отсутствующий второй символ
+кодируется нулём. Поэтому `A` и `AB` различны, а `AB`, `ABCDE` и `abOther`
+обозначают один symbol. Любое пользовательское имя с первым символом `F`
+отвергается; FABS, FSQT, FITR и FSGN распознаются прежним function parser.
+
+Старые `vars[26]` и `arrays[26][100]` заменены одной фиксированной таблицей из
+512 записей по 16 байт: canonical name key, scalar/indexed discriminator,
+signed int32 index и Float32 value. Scalar и каждый конкретный indexed element
+занимают отдельную запись. Lookup отсутствующего значения возвращает ноль и не
+выделяет запись; только runtime STORE выполняет find-or-create. Перезапись
+существующей записи допустима при полной таблице, а отказ 513-й записи не меняет
+count и существующие данные.
+
+Indexed syntax — только `NAME(expr)`. Индекс вычисляется общим expression path,
+проверяется на NaN, infinity и диапазон signed int32, затем явно округляется к
+ближайшему целому с ties-to-even независимо от `frm`. Отрицательные индексы
+допустимы. Wordcode scalar/indexed opcodes хранят canonical name key и выполняют
+lookup во время VM execution; компиляция persistent таблицу не меняет. SET,
+expression reads, существующий ASK и legacy FOR используют те же helpers.
+
+Таблица сохраняется через immediate, RUN, LIST/WRITE, SAVE, LOAD и QUIT. LOAD
+меняет только source. `reset_runtime` очищает временное состояние, но не symbols;
+ERASE очищает source, таблицу и runtime state. Новый suite использует настоящий
+RARS и exact stdout, включая 512/513, persistence, source preservation,
+nearest-even, F-reservation и immediate/stored/LOAD/batch paths. Python остаётся
+только драйвером и генератором fixtures.
 
 ## Ограничения
 
