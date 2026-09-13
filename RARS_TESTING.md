@@ -314,6 +314,34 @@ Suite проверяет точный stdout настоящего RARS и точ
 используется только как драйвер и для fixture/file assertions, не как oracle
 семантики FOCAL.
 
+## Разделитель, COMMENT и единый frontend (этап 6)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_frontend -p "test_*.py" -v
+```
+
+`compile_physical_line` является общей точкой компиляции одной физической
+FOCAL-строки для immediate-ввода и для строк `compile_program`. Последний путь
+одинаков для stored RUN, source после LOAD и embedded/batch программы. Frontend
+последовательно вызывает прежний `compile_statement`, проверяет его лексическую
+границу и потребляет `;`. Пустые участки между разделителями ничего не
+генерируют. Весь immediate wordcode строится до запуска VM, поэтому ошибка
+позднего оператора не выполняет уже скомпилированный префикс.
+
+Локальная проверка конца statement считает `;` границей, но не потребляет его.
+Благодаря этому строковые литералы разбираются существующим string parser и
+могут содержать `;`; предварительного split исходного текста нет. COMMENT/C
+точно распознаётся таблицей токенов и передвигает `parse_ptr` непосредственно
+до LF, CR или NUL. Поэтому comment-tail не разбирается и не может поглотить
+следующую физическую строку из `program_buf`.
+
+LIST/WRITE/SAVE по-прежнему выводят сохранённый операторный текст без
+переписывания пробелов, регистра, `;` или COMMENT. `line_offsets` фиксируется
+до вызова общего frontend и остаётся адресом начала numbered physical line.
+Новый exact suite проверяет empty operators, strings, COMMENT boundaries,
+QUIT, отсутствие partial immediate execution, совпадение immediate/stored/
+LOAD/batch, сохранность source и отдельный ASM-тест line offset.
+
 ## Ограничения
 
 - числовые литералы в RARS-исходнике пока целые;

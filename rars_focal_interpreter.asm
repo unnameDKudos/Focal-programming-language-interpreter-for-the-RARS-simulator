@@ -313,6 +313,10 @@ repl_loop:
     call repl_store_line
     j repl_loop
 repl_dispatch:
+    # A leading separator starts an immediate FOCAL physical line. It is not
+    # an environment command token and is handled by the common frontend.
+    li t1, 59
+    beq t0, t1, repl_immediate
     sw a0, parse_ptr, t0
     call read_keyword
     CHECK_ERROR (repl_loop)
@@ -474,7 +478,7 @@ rri_compile:
     call set_parse_span
     CHECK_ERROR (rri_done)
     # Immediate code has no source-line identity: no fake public 0: header.
-    call compile_statement
+    call compile_physical_line
     CHECK_ERROR (rri_done)
     li a0, OP_HALT
     call emit_word
@@ -1437,7 +1441,7 @@ cp_emit_loop:
     la t3, bytecode_buf
     sub t2, t2, t3
     sw t2, 0(t1)
-    call compile_statement
+    call compile_physical_line
     CHECK_ERROR (cp_done)
     addi s0, s0, 1
     j cp_emit_loop
@@ -1483,6 +1487,55 @@ safety_near_16:
     addi t1, t1, 1
     sw t1, 0(t0)
     ret
+# Compile one complete physical FOCAL line. Semicolons are recognized only
+# here, after each statement parser has respected string/token boundaries.
+# Empty statements emit no wordcode. COMMENT advances to the physical end.
+compile_physical_line:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+cpl_next:
+    call skip_parse_spaces
+    CHECK_ERROR (compile_physical_line_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_physical_line_bad_source)
+    lbu t1, 0(t0)
+    beqz t1, compile_physical_line_return
+    li t2, 10
+    beq t1, t2, compile_physical_line_return
+    li t2, 13
+    beq t1, t2, compile_physical_line_return
+    li t2, 59
+    bne t1, t2, cpl_statement
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    j cpl_next
+cpl_statement:
+    call compile_statement
+    CHECK_ERROR (compile_physical_line_return)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_physical_line_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_physical_line_bad_source)
+    lbu t1, 0(t0)
+    beqz t1, compile_physical_line_return
+    li t2, 10
+    beq t1, t2, compile_physical_line_return
+    li t2, 13
+    beq t1, t2, compile_physical_line_return
+    li t2, 59
+    bne t1, t2, compile_physical_line_bad_source
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    j cpl_next
+compile_physical_line_bad_source:
+    call error_syntax
+compile_physical_line_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# Compile exactly one non-empty statement and leave parse_ptr at its lexical
+# end. Physical separators and empty statements belong to the wrapper above.
 compile_statement:
     ENTER_FRAME (16)
     sw ra, 0(sp)
@@ -1510,7 +1563,7 @@ compile_statement:
     li t0, TK_QUIT
     beq a0, t0, cs_quit
     li t0, TK_COMMENT
-    beq a0, t0, cs_done
+    beq a0, t0, cs_comment
     li t0, TK_DO
     beq a0, t0, cs_deferred
     li t0, TK_RETURN
@@ -1560,11 +1613,41 @@ cs_quit:
     li a0, OP_HALT
     call emit_word
     CHECK_ERROR (compile_statement_return)
+    j cs_done
+cs_comment:
+    call compile_comment
+    CHECK_ERROR (compile_statement_return)
 cs_done:
     j compile_statement_return
 compile_statement_bad_source:
     call error_syntax
 compile_statement_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# COMMENT/C consumes unparsed bytes only to LF/CR/NUL. Thus a comment cannot
+# swallow the next numbered line in program_buf or embedded batch source.
+compile_comment:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    call consume_comment
+    CHECK_ERROR (compile_comment_return)
+cc_tail:
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_comment_bad_source)
+    lbu t1, 0(t0)
+    beqz t1, compile_comment_return
+    li t2, 10
+    beq t1, t2, compile_comment_return
+    li t2, 13
+    beq t1, t2, compile_comment_return
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    j cc_tail
+compile_comment_bad_source:
+    call error_syntax
+compile_comment_return:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
@@ -1613,7 +1696,7 @@ compile_type:
 ct_loop:
     call skip_parse_spaces
     CHECK_ERROR (compile_type_return)
-    call is_parse_line_end
+    call is_parse_statement_end
     CHECK_ERROR (compile_type_return)
     bnez a0, ct_done
     la t0, parse_ptr
@@ -2825,6 +2908,26 @@ is_parse_line_end:
 iple_yes:
     li a0, 1
     ret
+
+# Statement-local terminator. The physical-line frontend consumes ';'; the
+# individual statement compiler only needs to stop before it.
+is_parse_statement_end:
+    la t0, parse_ptr
+    lw t1, 0(t0)
+    CHECK_PARSE (t1, error_syntax)
+    lbu t2, 0(t1)
+    beqz t2, ipse_yes
+    li t3, 10
+    beq t2, t3, ipse_yes
+    li t3, 13
+    beq t2, t3, ipse_yes
+    li t3, 59
+    beq t2, t3, ipse_yes
+    li a0, 0
+    ret
+ipse_yes:
+    li a0, 1
+    ret
 parse_int:
     la t0, parse_ptr
     lw t1, 0(t0)
@@ -2932,6 +3035,9 @@ consume_goto:
     j consume_keyword
 consume_quit:
     li a7, TK_QUIT
+    j consume_keyword
+consume_comment:
+    li a7, TK_COMMENT
     j consume_keyword
 consume_do:
     li a7, TK_DO
@@ -3216,6 +3322,8 @@ pn_delimiter:
     beq t0, t6, pn_ok
     li t6, 13
     beq t0, t6, pn_ok
+    li t6, 59
+    beq t0, t6, pn_ok
     li t6, 58
     bne t0, t6, error_number
     bnez a2, error_number
@@ -3421,7 +3529,7 @@ compile_write:
     CHECK_ERROR (cw_done)
     call skip_parse_spaces
     CHECK_ERROR (cw_done)
-    call is_parse_line_end
+    call is_parse_statement_end
     CHECK_ERROR (cw_done)
     bnez a0, cw_emit
     lw t0, parse_ptr
@@ -3444,7 +3552,7 @@ cw_all:
 cw_end:
     call skip_parse_spaces
     CHECK_ERROR (cw_done)
-    call is_parse_line_end
+    call is_parse_statement_end
     CHECK_ERROR (cw_done)
     beqz a0, cw_bad
 cw_emit:
