@@ -59,6 +59,7 @@ safety_near_7:
 .eqv ERR_DEFERRED 13
 .eqv ERR_NUMBER 14
 .eqv ERR_MATH 15
+.eqv ERR_CONTEXT 16
 .eqv TK_SET 1
 .eqv TK_TYPE 2
 .eqv TK_ASK 3
@@ -110,6 +111,9 @@ safety_near_7:
 .eqv OP_JUMP_ABS   53
 .eqv OP_SIGN_BRANCH 54
 .eqv OP_JUMP_FIRST 55
+.eqv OP_LINE_END   56
+.eqv OP_DO         57
+.eqv OP_RETURN     58
 .eqv OP_PRINT_S    64
 .eqv OP_PRINT_F    65
 .eqv OP_PRINT_NL   66
@@ -124,6 +128,11 @@ safety_near_7:
 .eqv LINE_LEN      128
 .eqv SYMBOL_MAX    512
 .eqv SYMBOL_ENTRY_SIZE 16
+.eqv DO_MAX        16
+.eqv DO_CTX_SIZE   16
+.eqv DO_KIND_LINE  1
+.eqv DO_KIND_GROUP 2
+.eqv DO_CTX_TAG    0x444f4358
 .data
     .align 2
 focal_program:
@@ -152,6 +161,8 @@ line_numbers:   .space 512
 line_numbers_end:
 line_offsets:   .space 512
 line_offsets_end:
+line_end_offsets: .space 512
+line_end_offsets_end:
 repl_numbers:   .space 512
 repl_numbers_end:
 repl_texts:      .space 16384
@@ -178,6 +189,10 @@ type_num_buf:   .space 256
 type_num_buf_end:
 ask_input_buf:  .space 256
 ask_input_buf_end:
+do_depth:       .word 0
+do_contexts:    .space 256
+do_contexts_end:
+do_context_sentinel: .word 0x444f4358
 file_space:     .byte 32
 file_newline:   .byte 10
     .align 2
@@ -202,7 +217,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO [g.ll] jump; no target starts at the first stored line\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\nIF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nStandalone DO/D RETURN/R: recognized; not implemented yet.\nLegacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO [g.ll] jump; no target starts at the first stored line\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F DO/D RETURN/R QUIT/Q COMMENT/C.\nDO/D group calls a sorted group; DO/D g.ll calls one physical line.\nRETURN/R exits the innermost DO; line/group end returns naturally.\nIF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nLegacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -216,6 +231,7 @@ msg_syntax: .asciz "FOCAL/RARS error [E10]: invalid source\n"
 msg_proc_stack: .asciz "FOCAL/RARS error [E11]: procedural stack limit\n"
 msg_file: .asciz "FOCAL/RARS error [E12]: file I/O\n"
 msg_math: .asciz "FOCAL/RARS error [E15]: invalid arithmetic operation\n"
+msg_context: .asciz "FOCAL/RARS error [E16]: invalid DO/RETURN context\n"
 # Immutable keyword table; input bytes are compared, never normalized in place.
     .align 2
 keyword_table:
@@ -492,6 +508,7 @@ reset_runtime:
     la t0, line_count
     sw zero, 0(t0)
     sw zero, compile_has_line_control, t0
+    sw zero, do_depth, t0
     ret
 repl_run_immediate:
     ENTER_FRAME (32)
@@ -1496,6 +1513,25 @@ cp_emit_loop:
     sw t2, 0(t1)
     call compile_physical_line
     CHECK_ERROR (cp_done)
+    # Record and emit an identity-bearing physical-line boundary. Natural DO
+    # return uses this metadata; immediate tail code deliberately has no such
+    # public line identity.
+    slli t0, s0, 2
+    la t1, line_end_offsets
+    add t1, t1, t0
+    lw t2, bc_ptr
+    la t3, bytecode_buf
+    sub t2, t2, t3
+    sw t2, 0(t1)
+    li a0, OP_LINE_END
+    call emit_word
+    CHECK_ERROR (cp_done)
+    slli t0, s0, 2
+    la t1, line_numbers
+    add t1, t1, t0
+    lw a0, 0(t1)
+    call emit_word
+    CHECK_ERROR (cp_done)
     addi s0, s0, 1
     j cp_emit_loop
 cp_halt:
@@ -1618,9 +1654,9 @@ compile_statement:
     li t0, TK_COMMENT
     beq a0, t0, cs_comment
     li t0, TK_DO
-    beq a0, t0, cs_deferred
+    beq a0, t0, cs_do
     li t0, TK_RETURN
-    beq a0, t0, cs_deferred
+    beq a0, t0, cs_return
     li t0, TK_WRITE
     beq a0, t0, cs_write
     li a0, ERR_SYNTAX
@@ -1629,6 +1665,14 @@ compile_statement:
     j cs_done
 cs_write:
     call compile_write
+    CHECK_ERROR (compile_statement_return)
+    j cs_done
+cs_do:
+    call compile_do
+    CHECK_ERROR (compile_statement_return)
+    j cs_done
+cs_return:
+    call compile_return
     CHECK_ERROR (compile_statement_return)
     j cs_done
 cs_deferred:
@@ -2265,6 +2309,67 @@ compile_goto_return:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
+compile_do:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    call consume_do
+    CHECK_ERROR (compile_do_return)
+    call skip_parse_spaces
+    CHECK_ERROR (compile_do_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_do_return)
+    bnez a0, compile_do_bad_source
+    # WRITE-selector mode has exactly the required DO target grammar: a bare
+    # integer is a group, while group.line is a canonical line. It has no
+    # legacy GOTO ordinal migration and rejects ALL/variables.
+    li a0, 1
+    call parse_program_number
+    CHECK_ERROR (compile_do_return)
+    sw a0, 8(sp)
+    li t0, 1
+    beq a1, t0, compile_do_group
+    li t0, DO_KIND_LINE
+    sw t0, 4(sp)
+    j compile_do_emit
+compile_do_group:
+    li t0, DO_KIND_GROUP
+    sw t0, 4(sp)
+    lw t0, 8(sp)
+    li t1, 100
+    divu t0, t0, t1
+    sw t0, 8(sp)
+compile_do_emit:
+    li t0, 1
+    sw t0, compile_has_line_control, t1
+    li a0, OP_DO
+    call emit_word
+    CHECK_ERROR (compile_do_return)
+    lw a0, 4(sp)
+    call emit_word
+    CHECK_ERROR (compile_do_return)
+    lw a0, 8(sp)
+    call emit_word
+    j compile_do_return
+compile_do_bad_source:
+    call error_syntax
+compile_do_return:
+    lw ra, 0(sp)
+    addi sp, sp, 32
+    ret
+
+compile_return:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    call consume_return
+    CHECK_ERROR (compile_return_return)
+    li a0, OP_RETURN
+    call emit_word
+    CHECK_ERROR (compile_return_return)
+compile_return_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
 compile_for:
     ENTER_FRAME (32)
     sw ra, 0(sp)
@@ -3131,6 +3236,18 @@ vm_not_sign_branch:
     bne s1, t1, vm_not_jump_first
     j vm_jump_first
 vm_not_jump_first:
+    li t1, OP_LINE_END
+    bne s1, t1, vm_not_line_end
+    j vm_line_end
+vm_not_line_end:
+    li t1, OP_DO
+    bne s1, t1, vm_not_do
+    j vm_do
+vm_not_do:
+    li t1, OP_RETURN
+    bne s1, t1, vm_not_return
+    j vm_return
+vm_not_return:
     li t1, OP_PRINT_S
     bne s1, t1, safety_near_33
     j vm_print_s
@@ -3416,7 +3533,7 @@ vm_ge:
 vm_jump:
     call fetch_word
     CHECK_ERROR (vm_run_return)
-    call set_pc_to_line
+    call external_set_pc_to_line
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_jump_z:
@@ -3432,7 +3549,7 @@ vm_jump_z:
     j vm_loop
 safety_near_38:
     mv a0, s2
-    call set_pc_to_line
+    call external_set_pc_to_line
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_jump_nz:
@@ -3448,7 +3565,7 @@ vm_jump_nz:
     j vm_loop
 safety_near_39:
     mv a0, s2
-    call set_pc_to_line
+    call external_set_pc_to_line
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_jump_z_abs:
@@ -3504,11 +3621,35 @@ vm_sign_zero:
     lw a0, 20(sp)
 vm_sign_selected:
     beqz a0, vm_loop
-    call set_pc_to_line
+    call external_set_pc_to_line
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_jump_first:
-    call set_pc_to_first_line
+    call external_set_pc_to_first_line
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_line_end:
+    # s0 is the address of the opcode fetched at the top of vm_loop.
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv a1, s0
+    call handle_line_end
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_do:
+    # Fetch the complete instruction before validating or pushing a context.
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    sw a0, 16(sp)
+    call fetch_word
+    CHECK_ERROR (vm_run_return)
+    mv a1, a0
+    lw a0, 16(sp)
+    call do_call
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_return:
+    call do_return_top
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_print_s:
@@ -4100,15 +4241,15 @@ index_from_ft0:
     srli t1, t1, 1
     srli t2, t1, 23
     li t3, 255
-    beq t2, t3, error_array
+    beq t2, t3, ift_error_array
     la t0, index_upper_f
     flw ft1, 0(t0)
     flt.s t1, ft0, ft1
-    beqz t1, error_array
+    beqz t1, ift_error_array
     la t0, index_lower_f
     flw ft1, 0(t0)
     flt.s t1, ft0, ft1
-    bnez t1, error_array
+    bnez t1, ift_error_array
     fcvt.w.s a0, ft0, rtz
     fcvt.s.w ft1, a0
     fsub.s ft2, ft0, ft1
@@ -4118,9 +4259,9 @@ index_from_ft0:
     flt.s t0, ft3, ft2
     bnez t0, ift_adjust
     feq.s t0, ft2, ft3
-    beqz t0, safety_return
+    beqz t0, ift_done
     andi t0, a0, 1
-    beqz t0, safety_return
+    beqz t0, ift_done
 ift_adjust:
     la t0, zero_f
     flw ft1, 0(t0)
@@ -4130,34 +4271,40 @@ ift_adjust:
     ret
 ift_negative:
     addi a0, a0, -1
+ift_done:
     ret
+ift_error_array:
+    j error_array
 
 # Canonical variable key: uppercase first character in bits 0..7 and optional
 # uppercase letter/digit second character in bits 8..15. Higher bits are zero.
 validate_symbol_key:
     CHECK_ERROR (safety_return)
     srli t0, a0, 16
-    bnez t0, error_array
+    bnez t0, vsk_error_array
     andi t0, a0, 255
     li t1, 65
-    bltu t0, t1, error_array
+    bltu t0, t1, vsk_error_array
     li t1, 90
-    bgtu t0, t1, error_array
+    bgtu t0, t1, vsk_error_array
     li t1, 70
-    beq t0, t1, error_array
+    beq t0, t1, vsk_error_array
     srli t0, a0, 8
     andi t0, t0, 255
-    beqz t0, safety_return
+    beqz t0, vsk_done
     li t1, 48
     bltu t0, t1, vsk_letter
     li t1, 57
-    bleu t0, t1, safety_return
+    bleu t0, t1, vsk_done
 vsk_letter:
     li t1, 65
-    bltu t0, t1, error_array
+    bltu t0, t1, vsk_error_array
     li t1, 90
-    bgtu t0, t1, error_array
+    bgtu t0, t1, vsk_error_array
+vsk_done:
     ret
+vsk_error_array:
+    j error_array
 
 # a0=name key, a1=0 scalar/1 indexed, a2=integer index.
 # Returns a0=entry address or zero. Missing lookup never allocates.
@@ -4288,54 +4435,520 @@ sptf_missing:
     li a0, ERR_LINES
     la a1, err_line
     j set_error
-set_pc_to_line:
-    ENTER_FRAME (16)
+
+# Resolve a canonical public line identity without changing pc_ptr.
+# Returns a0=absolute wordcode address and a1=sorted line-table index.
+resolve_line_target:
+    ENTER_FRAME (32)
     sw ra, 0(sp)
-    sw s3, 4(sp)
-    mv s3, a0
-    la t0, line_count
-    lw t1, 0(t0)
-    li t6, MAX_LINES
-    bleu t1, t6, sptl_count_ok
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    mv s0, a0
+    lw s1, line_count
+    li t0, MAX_LINES
+    bleu s1, t0, rlt_scan_begin
     call error_lines
-    j set_pc_to_line_return
-sptl_count_ok:
-    li t2, 0
-sptl_loop:
-    bge t2, t1, sptl_fail
-    slli t3, t2, 2
-    la t4, line_numbers
-    add t4, t4, t3
-    lw t5, 0(t4)
-    beq t5, s3, sptl_found
-    addi t2, t2, 1
-    j sptl_loop
-sptl_found:
-    la t4, line_offsets
-    add t4, t4, t3
-    lw t5, 0(t4)
-    andi t6, t5, 3
-    bnez t6, sptl_bad_offset
-    la t0, bytecode_buf
-    lw t1, bc_ptr
-    sub t1, t1, t0
-    bgeu t5, t1, sptl_bad_offset
-    add a0, t0, t5
-    call set_pc_absolute
-    CHECK_ERROR (set_pc_to_line_return)
-    j sptl_done
-sptl_bad_offset:
+    j resolve_line_target_return
+rlt_scan_begin:
+    li s2, 0
+rlt_scan:
+    bgeu s2, s1, rlt_missing
+    slli t0, s2, 2
+    la t1, line_numbers
+    add t1, t1, t0
+    lw t2, 0(t1)
+    bne t2, s0, rlt_next
+    mv a0, t2
+    call validate_canonical_line_key
+    CHECK_ERROR (resolve_line_target_return)
+    slli t0, s2, 2
+    la t1, line_offsets
+    add t1, t1, t0
+    lw t2, 0(t1)
+    andi t3, t2, 3
+    bnez t3, rlt_bad_offset
+    la t4, bytecode_buf
+    lw t5, bc_ptr
+    bltu t5, t4, rlt_bad_offset
+    la t6, bytecode_end
+    bgtu t5, t6, rlt_bad_offset
+    sub t5, t5, t4
+    bgeu t2, t5, rlt_bad_offset
+    # Sorted physical lines are emitted contiguously. Entry zero starts at
+    # bytecode offset zero; every later entry begins two words after the
+    # preceding recorded OP_LINE_END. This rejects aligned operand/interior
+    # addresses as public line starts.
+    bnez s2, rlt_after_first
+    bnez t2, rlt_bad_offset
+    j rlt_check_end
+rlt_after_first:
+    addi t3, s2, -1
+    slli t3, t3, 2
+    la t6, line_end_offsets
+    add t6, t6, t3
+    lw t3, 0(t6)
+    andi t6, t3, 3
+    bnez t6, rlt_bad_offset
+    addi t3, t3, 8
+    bne t2, t3, rlt_bad_offset
+rlt_check_end:
+    slli t0, s2, 2
+    la t1, line_end_offsets
+    add t1, t1, t0
+    lw t3, 0(t1)
+    andi t6, t3, 3
+    bnez t6, rlt_bad_offset
+    bltu t3, t2, rlt_bad_offset
+    addi t6, t3, 8
+    bltu t6, t3, rlt_bad_offset
+    bgtu t6, t5, rlt_bad_offset
+    add t6, t4, t3
+    lw t0, 0(t6)
+    li t1, OP_LINE_END
+    bne t0, t1, rlt_bad_offset
+    lw t0, 4(t6)
+    bne t0, s0, rlt_bad_offset
+    add a0, t4, t2
+    mv a1, s2
+    j resolve_line_target_return
+rlt_next:
+    addi s2, s2, 1
+    j rlt_scan
+rlt_bad_offset:
     call error_bc_access
-    j set_pc_to_line_return
-sptl_fail:
+    j resolve_line_target_return
+rlt_missing:
     li a0, ERR_LINES
     la a1, err_line
     call set_error
-sptl_done:
+resolve_line_target_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 32
+    ret
+
+set_pc_to_line:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    call resolve_line_target
+    CHECK_ERROR (set_pc_to_line_return)
+    call set_pc_absolute
+    CHECK_ERROR (set_pc_to_line_return)
 set_pc_to_line_return:
-    lw s3, 4(sp)
     lw ra, 0(sp)
     addi sp, sp, 16
+    ret
+
+# Runtime line transfers first resolve the target, then atomically unwind only
+# those DO contexts which do not contain the selected canonical line.
+external_set_pc_to_line:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    mv s0, a0
+    call resolve_line_target
+    CHECK_ERROR (external_set_pc_to_line_return)
+    mv s1, a0
+    mv a0, s0
+    call do_unwind_for_target
+    CHECK_ERROR (external_set_pc_to_line_return)
+    sw s1, pc_ptr, t0
+external_set_pc_to_line_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    addi sp, sp, 32
+    ret
+
+external_set_pc_to_first_line:
+    lw t0, line_count
+    li t1, MAX_LINES
+    bgtu t0, t1, espf_bad_count
+    beqz t0, espf_missing
+    lw a0, line_numbers
+    j external_set_pc_to_line
+espf_bad_count:
+    j error_lines
+espf_missing:
+    li a0, ERR_LINES
+    la a1, err_line
+    j set_error
+
+# Canonical line identities are 01.01..99.99 with a nonzero line component.
+# This helper validates internal metadata and therefore reports a context error.
+validate_canonical_line_key:
+    li t0, 101
+    bltu a0, t0, error_context
+    li t0, 9999
+    bgtu a0, t0, error_context
+    li t0, 100
+    remu t1, a0, t0
+    beqz t1, error_context
+    ret
+
+# Resolve the first sorted physical line in group a0. Returns the same values
+# as resolve_line_target. Missing groups share the public E08 contract.
+resolve_group_first:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    mv s0, a0
+    li t0, 1
+    bltu s0, t0, rgf_bad
+    li t0, 99
+    bgtu s0, t0, rgf_bad
+    lw s1, line_count
+    li t0, MAX_LINES
+    bleu s1, t0, rgf_scan_begin
+    call error_lines
+    j resolve_group_first_return
+rgf_scan_begin:
+    li t0, 0
+rgf_scan:
+    bgeu t0, s1, rgf_missing
+    slli t1, t0, 2
+    la t2, line_numbers
+    add t2, t2, t1
+    lw t3, 0(t2)
+    li t4, 100
+    divu t5, t3, t4
+    beq t5, s0, rgf_found
+    addi t0, t0, 1
+    j rgf_scan
+rgf_found:
+    mv a0, t3
+    call validate_canonical_line_key
+    CHECK_ERROR (resolve_group_first_return)
+    mv a0, t3
+    call resolve_line_target
+    j resolve_group_first_return
+rgf_bad:
+    call error_context
+    j resolve_group_first_return
+rgf_missing:
+    li a0, ERR_LINES
+    la a1, err_line
+    call set_error
+resolve_group_first_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    addi sp, sp, 32
+    ret
+
+# Validate a context entry pointer and every field before it may affect depth or
+# pc. Layout: return pc, kind, canonical scope, integrity tag.
+validate_do_context:
+    la t0, do_contexts
+    bltu a0, t0, error_context
+    la t1, do_contexts_end
+    bgeu a0, t1, error_context
+    sub t2, a0, t0
+    andi t2, t2, 15
+    bnez t2, error_context
+    lw t2, 0(a0)
+    lw t3, 4(a0)
+    xor t4, t2, t3
+    lw t3, 8(a0)
+    xor t4, t4, t3
+    li t3, DO_CTX_TAG
+    xor t4, t4, t3
+    lw t3, 12(a0)
+    bne t4, t3, error_context
+    andi t3, t2, 3
+    bnez t3, error_context
+    la t4, bytecode_buf
+    bltu t2, t4, error_context
+    lw t5, bc_ptr
+    bltu t5, t4, error_context
+    la t6, bytecode_end
+    bgtu t5, t6, error_context
+    bgeu t2, t5, error_context
+    lw t2, 4(a0)
+    li t3, DO_KIND_LINE
+    beq t2, t3, vdc_line
+    li t3, DO_KIND_GROUP
+    bne t2, t3, error_context
+    lw t2, 8(a0)
+    li t3, 1
+    bltu t2, t3, error_context
+    li t3, 99
+    bgtu t2, t3, error_context
+    ret
+vdc_line:
+    lw t2, 8(a0)
+    mv a0, t2
+    j validate_canonical_line_key
+
+# Push one fully validated DO context and enter its line/group without applying
+# external-jump unwind semantics. a0=kind, a1=scope.
+do_call:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    mv s0, a0
+    mv s1, a1
+    li t0, DO_KIND_LINE
+    beq s0, t0, dc_resolve_line
+    li t0, DO_KIND_GROUP
+    bne s0, t0, dc_bad
+    mv a0, s1
+    call resolve_group_first
+    CHECK_ERROR (do_call_return)
+    mv s2, a0
+    j dc_target_ready
+dc_resolve_line:
+    mv a0, s1
+    call resolve_line_target
+    CHECK_ERROR (do_call_return)
+    mv s2, a0
+dc_target_ready:
+    lw s3, do_depth
+    li t0, DO_MAX
+    bgtu s3, t0, dc_bad
+    beq s3, t0, dc_bad
+    lw t0, pc_ptr
+    andi t1, t0, 3
+    bnez t1, dc_bad
+    la t1, bytecode_buf
+    bltu t0, t1, dc_bad
+    lw t2, bc_ptr
+    bgeu t0, t2, dc_bad
+    slli t1, s3, 4
+    la t2, do_contexts
+    add t2, t2, t1
+    la t3, do_contexts_end
+    addi t4, t2, DO_CTX_SIZE
+    bgtu t4, t3, dc_bad
+    sw t0, 0(t2)
+    sw s0, 4(t2)
+    sw s1, 8(t2)
+    xor t4, t0, s0
+    xor t4, t4, s1
+    li t3, DO_CTX_TAG
+    xor t4, t4, t3
+    sw t4, 12(t2)
+    addi s3, s3, 1
+    sw s3, do_depth, t0
+    sw s2, pc_ptr, t0
+    j do_call_return
+dc_bad:
+    call error_context
+do_call_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    addi sp, sp, 48
+    ret
+
+# Explicit RETURN and natural boundary return share one checked pop operation.
+do_return_top:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    lw s0, do_depth
+    li t0, DO_MAX
+    bgtu s0, t0, drt_bad
+    beqz s0, drt_bad
+    addi s1, s0, -1
+    slli t0, s1, 4
+    la t1, do_contexts
+    add s1, t1, t0
+    mv a0, s1
+    call validate_do_context
+    CHECK_ERROR (do_return_top_return)
+    lw t0, 0(s1)
+    addi s0, s0, -1
+    sw s0, do_depth, t1
+    sw t0, pc_ptr, t1
+    j do_return_top_return
+drt_bad:
+    call error_context
+do_return_top_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    addi sp, sp, 32
+    ret
+
+# The target has already been resolved. Compute a candidate depth completely,
+# validating every popped/top context, and commit once so failures cannot cause
+# a partial unwind.
+do_unwind_for_target:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    mv s0, a0
+    mv a0, s0
+    call validate_canonical_line_key
+    CHECK_ERROR (do_unwind_for_target_return)
+    lw s1, do_depth
+    li t0, DO_MAX
+    bgtu s1, t0, duft_bad
+duft_loop:
+    beqz s1, duft_commit
+    addi t0, s1, -1
+    slli t0, t0, 4
+    la t1, do_contexts
+    add s2, t1, t0
+    mv a0, s2
+    call validate_do_context
+    CHECK_ERROR (do_unwind_for_target_return)
+    lw s3, 4(s2)
+    lw t0, 8(s2)
+    li t1, DO_KIND_LINE
+    bne s3, t1, duft_group
+    beq s0, t0, duft_commit
+    addi s1, s1, -1
+    j duft_loop
+duft_group:
+    li t1, 100
+    divu t2, s0, t1
+    beq t2, t0, duft_commit
+    addi s1, s1, -1
+    j duft_loop
+duft_commit:
+    sw s1, do_depth, t0
+    j do_unwind_for_target_return
+duft_bad:
+    call error_context
+do_unwind_for_target_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    addi sp, sp, 48
+    ret
+
+# Validate that OP_LINE_END really occupies the recorded boundary for key a0.
+# a1 is the opcode address; returns a0=sorted line-table index.
+validate_line_boundary:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    mv s0, a0
+    mv s1, a1
+    mv a0, s0
+    call validate_canonical_line_key
+    CHECK_ERROR (validate_line_boundary_return)
+    lw t0, line_count
+    li t1, MAX_LINES
+    bgtu t0, t1, vlb_bad
+    li s2, 0
+vlb_scan:
+    bgeu s2, t0, vlb_bad
+    slli t1, s2, 2
+    la t2, line_numbers
+    add t2, t2, t1
+    lw t3, 0(t2)
+    beq t3, s0, vlb_found
+    addi s2, s2, 1
+    j vlb_scan
+vlb_found:
+    la t2, line_end_offsets
+    add t2, t2, t1
+    lw t3, 0(t2)
+    andi t4, t3, 3
+    bnez t4, vlb_bad
+    la t4, bytecode_buf
+    lw t5, bc_ptr
+    bltu t5, t4, vlb_bad
+    la t6, bytecode_end
+    bgtu t5, t6, vlb_bad
+    sub t6, t5, t4
+    bgeu t3, t6, vlb_bad
+    add t3, t4, t3
+    bne t3, s1, vlb_bad
+    mv a0, s2
+    j validate_line_boundary_return
+vlb_bad:
+    call error_context
+validate_line_boundary_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 48
+    ret
+
+# A line call returns at its exact physical boundary. A group call continues
+# across sorted lines in that group and returns after the group's last line.
+handle_line_end:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    mv s0, a0
+    call validate_line_boundary
+    CHECK_ERROR (handle_line_end_return)
+    mv s1, a0
+    lw s2, do_depth
+    li t0, DO_MAX
+    bgtu s2, t0, hle_bad
+    beqz s2, handle_line_end_return
+    addi t0, s2, -1
+    slli t0, t0, 4
+    la t1, do_contexts
+    add s3, t1, t0
+    mv a0, s3
+    call validate_do_context
+    CHECK_ERROR (handle_line_end_return)
+    lw t0, 4(s3)
+    lw t1, 8(s3)
+    li t2, DO_KIND_LINE
+    bne t0, t2, hle_group
+    bne s0, t1, hle_bad
+    call do_return_top
+    j handle_line_end_return
+hle_group:
+    li t2, 100
+    divu t3, s0, t2
+    bne t3, t1, hle_bad
+    addi t3, s1, 1
+    lw t4, line_count
+    bgeu t3, t4, hle_return
+    slli t3, t3, 2
+    la t4, line_numbers
+    add t4, t4, t3
+    lw t5, 0(t4)
+    mv a0, t5
+    call validate_canonical_line_key
+    CHECK_ERROR (handle_line_end_return)
+    li t2, 100
+    divu t3, t5, t2
+    lw t1, 8(s3)
+    beq t3, t1, handle_line_end_return
+hle_return:
+    call do_return_top
+    j handle_line_end_return
+hle_bad:
+    call error_context
+handle_line_end_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    addi sp, sp, 48
     ret
 emit_word:
     CHECK_ERROR (safety_return)
@@ -4521,6 +5134,9 @@ consume_comment:
 consume_do:
     li a7, TK_DO
     j consume_keyword
+consume_return:
+    li a7, TK_RETURN
+    j consume_keyword
 consume_then:
     li a7, TK_THEN
     j consume_keyword
@@ -4647,6 +5263,10 @@ error_file:
 error_math:
     li a0, ERR_MATH
     la a1, msg_math
+    j set_error
+error_context:
+    li a0, ERR_CONTEXT
+    la a1, msg_context
     j set_error
 check_pool_string:
     CHECK_ERROR (safety_return)

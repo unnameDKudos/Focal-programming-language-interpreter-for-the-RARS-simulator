@@ -409,6 +409,243 @@ la t0, bytecode_buf
 sw t0, pc_ptr, t1
 call vm_run
 """ + error_is("ERR_LINES"),
+    "do_opcode_truncated_operands": """
+li a0, OP_DO
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li a0, OP_DO
+call emit_word
+li a0, DO_KIND_LINE
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS"),
+    "do_opcode_bad_kind": """
+li a0, OP_DO
+call emit_word
+li a0, 99
+call emit_word
+li a0, 101
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+bnez t0, test_fail
+lw t0, do_context_sentinel
+li t1, 0x444f4358
+bne t0, t1, test_fail
+""",
+    "do_missing_target_push_is_atomic": """
+li a0, OP_HALT
+call emit_word
+li a0, DO_KIND_LINE
+li a1, 9999
+call do_call
+""" + error_is("ERR_LINES") + """
+lw t0, do_depth
+bnez t0, test_fail
+lw t0, do_context_sentinel
+li t1, 0x444f4358
+bne t0, t1, test_fail
+""",
+    "do_stack_capacity_and_sentinel": """
+li a0, OP_NOP
+call emit_word
+li a0, OP_LINE_END
+call emit_word
+li a0, 101
+call emit_word
+li a0, OP_HALT
+call emit_word
+li t0, 1
+sw t0, line_count, t1
+li t0, 101
+sw t0, line_numbers, t1
+sw zero, line_offsets, t1
+li t0, 4
+sw t0, line_end_offsets, t1
+li t0, DO_MAX
+sw t0, do_depth, t1
+li a0, DO_KIND_LINE
+li a1, 101
+call do_call
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, DO_MAX
+bne t0, t1, test_fail
+lw t0, do_context_sentinel
+li t1, 0x444f4358
+bne t0, t1, test_fail
+""",
+    "return_outside_and_corrupt_depth": """
+call do_return_top
+""" + error_is("ERR_CONTEXT") + """
+call reset_runtime
+li t0, 17
+sw t0, do_depth, t1
+call do_return_top
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, 17
+bne t0, t1, test_fail
+""",
+    "return_rejects_corrupt_active_context": """
+li a0, OP_HALT
+call emit_word
+la t2, do_contexts
+la t0, bytecode_buf
+sw t0, 0(t2)
+li t0, 99
+sw t0, 4(t2)
+li t0, 101
+sw t0, 8(t2)
+lw t3, 0(t2)
+lw t4, 4(t2)
+xor t3, t3, t4
+lw t4, 8(t2)
+xor t3, t3, t4
+li t4, DO_CTX_TAG
+xor t3, t3, t4
+sw t3, 12(t2)
+li t0, 1
+sw t0, do_depth, t1
+call do_return_top
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, 1
+bne t0, t1, test_fail
+lw t0, do_context_sentinel
+li t1, 0x444f4358
+bne t0, t1, test_fail
+""",
+    "return_rejects_bad_return_pc": """
+li a0, OP_HALT
+call emit_word
+la t2, do_contexts
+la t0, bytecode_buf
+addi t0, t0, 1
+sw t0, 0(t2)
+li t0, DO_KIND_LINE
+sw t0, 4(t2)
+li t0, 101
+sw t0, 8(t2)
+lw t3, 0(t2)
+lw t4, 4(t2)
+xor t3, t3, t4
+lw t4, 8(t2)
+xor t3, t3, t4
+li t4, DO_CTX_TAG
+xor t3, t3, t4
+sw t3, 12(t2)
+li t0, 1
+sw t0, do_depth, t1
+call do_return_top
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, 1
+bne t0, t1, test_fail
+""",
+    "line_end_opcode_truncated": """
+li a0, OP_LINE_END
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS"),
+    "line_end_rejects_wrong_identity": """
+li t0, 1
+sw t0, line_count, t1
+li t0, 101
+sw t0, line_numbers, t1
+sw zero, line_end_offsets, t1
+li a0, OP_LINE_END
+call emit_word
+li a0, 102
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_CONTEXT"),
+    "line_end_rejects_corrupt_metadata": """
+li t0, 1
+sw t0, line_count, t1
+li t0, 101
+sw t0, line_numbers, t1
+li t0, 4
+sw t0, line_end_offsets, t1
+li a0, OP_LINE_END
+call emit_word
+li a0, 101
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_CONTEXT"),
+    "missing_external_target_does_not_unwind": """
+li t0, 1
+sw t0, do_depth, t1
+li t0, 0x12345678
+sw t0, do_contexts, t1
+li a0, 9999
+call external_set_pc_to_line
+""" + error_is("ERR_LINES") + """
+lw t0, do_depth
+li t1, 1
+bne t0, t1, test_fail
+lw t0, do_contexts
+li t1, 0x12345678
+bne t0, t1, test_fail
+""",
+    "corrupt_context_does_not_partially_unwind": """
+li a0, OP_NOP
+call emit_word
+li a0, OP_LINE_END
+call emit_word
+li a0, 202
+call emit_word
+li a0, OP_HALT
+call emit_word
+li t0, 1
+sw t0, line_count, t1
+li t0, 202
+sw t0, line_numbers, t1
+sw zero, line_offsets, t1
+li t0, 4
+sw t0, line_end_offsets, t1
+la t2, do_contexts
+la t0, bytecode_buf
+sw t0, 0(t2)
+li t1, DO_KIND_GROUP
+sw t1, 4(t2)
+li t1, 2
+sw t1, 8(t2)
+sw t0, 16(t2)
+li t1, 99
+sw t1, 20(t2)
+li t1, 303
+sw t1, 24(t2)
+li t0, 2
+sw t0, do_depth, t1
+li a0, 202
+call external_set_pc_to_line
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, 2
+bne t0, t1, test_fail
+""",
     "corrupt_line_target_offsets": """
 li t0, 1
 sw t0, line_count, t1
@@ -428,6 +665,25 @@ li t0, 101
 sw t0, line_numbers, t1
 li t0, -4
 sw t0, line_offsets, t1
+li a0, OP_HALT
+call emit_word
+li a0, 101
+call set_pc_to_line
+""" + error_is("ERR_BC_ACCESS") + """
+call reset_runtime
+li t0, 1
+sw t0, line_count, t1
+li t0, 101
+sw t0, line_numbers, t1
+li t0, 4
+sw t0, line_offsets, t1
+sw t0, line_end_offsets, t1
+li a0, OP_NOP
+call emit_word
+li a0, OP_LINE_END
+call emit_word
+li a0, 101
+call emit_word
 li a0, OP_HALT
 call emit_word
 li a0, 101

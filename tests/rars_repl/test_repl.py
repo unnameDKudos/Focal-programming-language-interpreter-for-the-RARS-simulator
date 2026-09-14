@@ -12,7 +12,7 @@ from rars_test_support import check_environment, run_rars
 BANNER = 'FOCAL/RARS REPL. Enter HELP for commands.\n'
 UNKNOWN = 'FOCAL/RARS error [E10]: unknown statement\n'
 SYNTAX = 'FOCAL/RARS error [E10]: invalid source\n'
-DEFERRED = 'FOCAL/RARS error [E13]: recognized statement not implemented yet\n'
+CONTEXT = 'FOCAL/RARS error [E16]: invalid DO/RETURN context\n'
 HELP = ('Commands:\n'
         '  group.line text   add/replace; number only deletes (1.1 = 1.10)\n'
         '  FOCAL statement   execute immediately; keywords ignore case\n'
@@ -26,11 +26,12 @@ HELP = ('Commands:\n'
         '  HELP              show this help\n'
         '  QUIT / Q          stop FOCAL execution; return to REPL\n'
         '  EXIT              exit interpreter/RARS\n'
-        'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F QUIT/Q COMMENT/C.\n'
+        'Statements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F DO/D RETURN/R QUIT/Q COMMENT/C.\n'
+        'DO/D group calls a sorted group; DO/D g.ll calls one physical line.\n'
+        'RETURN/R exits the innermost DO; line/group end returns naturally.\n'
         'IF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\n'
         'TYPE formats: % exponential; %W integer field; %W.0d fixed field.\n'
         'ASK items: "text", variable, !; each variable reads one expression after \':\'.\n'
-        'Standalone DO/D RETURN/R: recognized; not implemented yet.\n'
         'Legacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n')
 
 
@@ -73,10 +74,13 @@ class ReplTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.session([(token, UNKNOWN), ('QUIT', ''), ('TYPE "Alive",!', 'Alive\n')])
 
-    def test_return_and_do_and_write_are_recognized_not_run(self):
-        for token in ['RETURN', 'R', 'DO', 'D']:
+    def test_return_do_and_write_dispatch(self):
+        for token in ['RETURN', 'R']:
             with self.subTest(token=token):
-                self.session([('1 TYPE "NOT RUN",!', ''), (token, DEFERRED), ('Q', '')])
+                self.session([('1 TYPE "NOT RUN",!', ''), (token, CONTEXT), ('Q', '')])
+        for token in ['DO', 'D']:
+            with self.subTest(token=token):
+                self.session([('1 TYPE "NOT RUN",!', ''), (token, SYNTAX), ('Q', '')])
         # WRITE is implemented in stage 4: viewing source is not executing it.
         for token in ['WRITE', 'W']:
             with self.subTest(token=token):

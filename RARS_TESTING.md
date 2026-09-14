@@ -37,10 +37,11 @@ A = 14.0
 не являются сокращениями. Ключевые слова сравниваются без учета регистра,
 но хранимый исходник и строковые литералы не переписываются. Допустимые имена:
 SET/S, TYPE/T, ASK/A, GOTO/G/GO, IF/I, FOR/F, DO/D, RETURN/R, QUIT/Q, COMMENT/C,
-WRITE/W. Самостоятельные DO/RETURN пока дают явную ошибку E13
-«recognized statement not implemented yet»; их семантика относится к следующим
-этапам. Нормативный `IF/I` является sign-IF; прежний внутристрочный DO доступен
-только в явно отделённой непарентезированной compatibility-грамматике IF/FOR.
+WRITE/W. `DO/D group` вызывает отсортированную группу, `DO/D g.ll` — одну
+физическую строку; `RETURN/R` досрочно завершает верхний вызов, а нормальный
+конец вызванной строки/группы возвращает управление автоматически. Нормативный
+`IF/I` является sign-IF; прежний внутристрочный DO доступен только в явно
+отделённой непарентезированной compatibility-грамматике IF/FOR.
 RUN, LIST, LOAD, SAVE и immediate execution сами по себе не очищают переменные.
 
 Строки можно вводить в любом порядке. Повторный ввод номера заменяет строку,
@@ -187,8 +188,8 @@ py -3 -B -m unittest discover -s tests/rars_safety -p "test_*.py" -v
 $LASTEXITCODE
 ```
 
-Успех: `Ran 15 tests`, `OK`, код 0. Это 79 реальных запусков RARS:
-57 низкоуровневых subtests, один ABI harness, 16 batch/REPL-сценариев и пять
+Успех: `Ran 15 tests`, `OK`, код 0. Это 91 реальный запуск RARS:
+69 низкоуровневых subtests, один ABI harness, 16 batch/REPL-сценариев и пять
 ASK nested-evaluator harness-сценариев.
 Harness добавляет только входную точку и тестовые данные во временную копию
 целевого ASM и вызывает его процедуры. Python не реализует семантику FOCAL
@@ -565,6 +566,65 @@ expressions/symbols/index/functions, ASK/TYPE state, malformed syntax, выбр�
 проверяет усечённый conditional opcode, stack underflow, corrupted selected key,
 повреждённые line offsets и absolute jump до/после/между границами wordcode.
 Python остаётся только драйвером, generator fixtures и механизмом assertions.
+
+## DO / RETURN и стек контекстов (этап 12)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_do -p "test_*.py" -v
+```
+
+Нормативная грамматика — `DO target`/`D target` и `RETURN`/`R`, где bare
+decimal `target` означает группу `1..99`, а composite `g.ll` — точную строку.
+`2.1` и `2.10` имеют один canonical key; legacy integer-ordinal GOTO grammar на
+DO не распространяется. Bare `DO`, `DO ALL` и variable target не входят в
+профиль. Исходное написание операторов сохраняется для LIST/WRITE/SAVE.
+
+Компилятор выдаёт `OP_DO kind,scope` и `OP_RETURN`. Для каждой хранимой
+физической строки он также выдаёт `OP_LINE_END canonical_key` и записывает её
+проверяемый wordcode offset в `line_end_offsets`. Поэтому `DO g.ll` выполняет
+все statements ровно этой физической строки, а `DO group` начинает с
+минимального существующего ключа группы и проходит её строки в canonical
+порядке. `OP_LINE_END` завершает line-call на границе указанной строки либо
+group-call после последней строки группы. Естественный и явный возврат используют
+одну процедуру checked pop; `RETURN` пропускает остаток текущей execution path.
+
+FOCAL-стек DO является отдельным статическим массивом из 16 записей по 16 байт,
+не связанным с RISC-V `sp` и вычислительным VM stack. Запись содержит абсолютный
+`return_pc`, вид области (`LINE`/`GROUP`), canonical line key либо номер группы и
+integrity tag по этим трём полям. Target, depth, return address, tag и границы
+проверяются до commit; depth записывается последним. Семнадцатый вызов,
+`RETURN` вне вызова и повреждённая запись дают контролируемую E16 без OOB.
+Отсутствующая строка/группа даёт E08 до push.
+
+DO выполняет raw validated transfer после push и потому не разрушает caller
+context. Пользовательские `GOTO`, no-target `GO`, выбранные sign-IF branches и
+legacy line-control opcodes проходят через общий DO-aware transfer. Сначала
+полностью разрешается существующая target line через `line_numbers`/
+`line_offsets`, затем все проверяемые контексты рассматриваются сверху вниз.
+Контекст сохраняется, если target принадлежит его canonical scope; иначе он
+включается в candidate unwind. Новый depth фиксируется один раз после полной
+валидации. Так inner context может быть снят с сохранением outer context, а
+переход наружу из всех вызовов удаляет их без исторического return-like
+поведения. Missing selected target и повреждённый context не дают partial unwind.
+Внутренние `OP_JUMP_ABS`/`OP_JUMP_Z_ABS` этого механизма не вызывают.
+
+Immediate DO использует общий механизм stage 11: сохранённая программа и
+полностью скомпилированная immediate physical line находятся в одном wordcode
+image, а `return_pc` указывает на statement сразу после DO в immediate tail.
+Stored RUN, LOAD→RUN и batch используют тот же compiler/VM path. ASK values,
+symbol table и persistent TYPE format переживают вызовы без копирования;
+`QUIT` прекращает всё текущее FOCAL execution. Перед каждым новым REPL/batch
+execution `reset_runtime` обнуляет depth, поэтому QUIT и runtime error не
+оставляют stale contexts.
+
+Dedicated exact-stdout suite покрывает line/group calls, natural и explicit
+RETURN, nested LIFO, 16/17, aliases/case/composite identity, missing targets,
+внутренние и внешние GOTO/IF, selective unwind, immediate/stored/LOAD/batch,
+QUIT/error cleanup, ASK/TYPE/symbol state, source preservation, compile-before-
+run atomicity и адаптированные исторические примеры 2.36/2.37/RETURN. Low-level
+safety cases проверяют усечённые opcodes, kind/scope/depth/return_pc, sentinel,
+identity/offset границы строк и отсутствие частичного push/unwind. Python здесь
+остаётся только RARS driver, generator fixtures и механизмом assertions.
 
 ## Ограничения
 
