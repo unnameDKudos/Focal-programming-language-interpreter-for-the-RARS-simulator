@@ -30,9 +30,10 @@ HELP = ('Commands:\n'
         'DO/D group calls a sorted group; DO/D g.ll calls one physical line.\n'
         'RETURN/R exits the innermost DO; line/group end returns naturally.\n'
         'IF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\n'
+        'FOR/F variable=start[,step],limit; body loops through the physical-line tail.\n'
         'TYPE formats: % exponential; %W integer field; %W.0d fixed field.\n'
         'ASK items: "text", variable, !; each variable reads one expression after \':\'.\n'
-        'Legacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n')
+        'Legacy integer targets, non-parenthesized IF and FOR ... DO are compatibility paths.\n')
 
 
 class ReplTests(unittest.TestCase):

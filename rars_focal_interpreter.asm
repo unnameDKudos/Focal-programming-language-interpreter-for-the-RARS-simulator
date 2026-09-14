@@ -114,6 +114,8 @@ safety_near_7:
 .eqv OP_LINE_END   56
 .eqv OP_DO         57
 .eqv OP_RETURN     58
+.eqv OP_FOR_ENTER  59
+.eqv OP_FOR_NEXT   60
 .eqv OP_PRINT_S    64
 .eqv OP_PRINT_F    65
 .eqv OP_PRINT_NL   66
@@ -133,6 +135,9 @@ safety_near_7:
 .eqv DO_KIND_LINE  1
 .eqv DO_KIND_GROUP 2
 .eqv DO_CTX_TAG    0x444f4358
+.eqv FOR_MAX       16
+.eqv FOR_CTX_SIZE  32
+.eqv FOR_CTX_TAG   0x464f5258
 .data
     .align 2
 focal_program:
@@ -193,6 +198,10 @@ do_depth:       .word 0
 do_contexts:    .space 256
 do_contexts_end:
 do_context_sentinel: .word 0x444f4358
+for_depth:      .word 0
+for_contexts:   .space 512
+for_contexts_end:
+for_context_sentinel: .word 0x464f5258
 file_space:     .byte 32
 file_newline:   .byte 10
     .align 2
@@ -217,7 +226,7 @@ repl_empty:     .asciz "No program\n"
 repl_load_ok:   .asciz "Loaded\n"
 repl_save_ok:   .asciz "Saved\n"
 repl_file_err:  .asciz "File error\n"
-repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO [g.ll] jump; no target starts at the first stored line\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F DO/D RETURN/R QUIT/Q COMMENT/C.\nDO/D group calls a sorted group; DO/D g.ll calls one physical line.\nRETURN/R exits the innermost DO; line/group end returns naturally.\nIF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nLegacy integer targets and non-parenthesized IF/FOR are compatibility paths.\n"
+repl_help_text: .asciz "Commands:\n  group.line text   add/replace; number only deletes (1.1 = 1.10)\n  FOCAL statement   execute immediately; keywords ignore case\n  RUN               run stored program; preserve variables\n  G / GO / GOTO [g.ll] jump; no target starts at the first stored line\n  LIST              show stored program\n  WRITE/W [ALL|g|g.ll] show all source, one group or one line\n  LOAD <file>       load program; preserve variables\n  SAVE <file>       save stored program\n  ERASE             clear program, variables and runtime state\n  HELP              show this help\n  QUIT / Q          stop FOCAL execution; return to REPL\n  EXIT              exit interpreter/RARS\nStatements: SET/S TYPE/T ASK/A GOTO/G/GO IF/I FOR/F DO/D RETURN/R QUIT/Q COMMENT/C.\nDO/D group calls a sorted group; DO/D g.ll calls one physical line.\nRETURN/R exits the innermost DO; line/group end returns naturally.\nIF/I (expr) negative[,zero[,positive]] branches by the Float32 sign.\nFOR/F variable=start[,step],limit; body loops through the physical-line tail.\nTYPE formats: % exponential; %W integer field; %W.0d fixed field.\nASK items: \"text\", variable, !; each variable reads one expression after ':'.\nLegacy integer targets, non-parenthesized IF and FOR ... DO are compatibility paths.\n"
 msg_bc_full: .asciz "FOCAL/RARS error [E01]: bytecode capacity\n"
 msg_bc_access: .asciz "FOCAL/RARS error [E02]: invalid wordcode access\n"
 msg_vm_overflow: .asciz "FOCAL/RARS error [E03]: VM stack overflow\n"
@@ -509,6 +518,7 @@ reset_runtime:
     sw zero, 0(t0)
     sw zero, compile_has_line_control, t0
     sw zero, do_depth, t0
+    sw zero, for_depth, t0
     ret
 repl_run_immediate:
     ENTER_FRAME (32)
@@ -2371,34 +2381,24 @@ compile_return_return:
     ret
 
 compile_for:
-    ENTER_FRAME (32)
+    ENTER_FRAME (48)
     sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
     call consume_for
     CHECK_ERROR (compile_for_return)
     call parse_variable_ref
     CHECK_ERROR (compile_for_return)
     bnez a1, compile_for_bad_source
-    sw a0, 4(sp)
+    mv s0, a0
     call skip_parse_spaces
     CHECK_ERROR (compile_for_return)
     call consume_equal
     CHECK_ERROR (compile_for_return)
+    # Stack order is start, then either limit or step,limit. The runtime
+    # instruction supplies the default +1 step for the two-expression form.
     call compile_expr
-    CHECK_ERROR (compile_for_return)
-    li a0, OP_STORE_V
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    la t0, bc_ptr
-    lw t1, 0(t0)
-    sw t1, 12(sp)
-    li a0, OP_PUSH_V
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    lw a0, 4(sp)
-    call emit_word
     CHECK_ERROR (compile_for_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_for_return)
@@ -2406,71 +2406,92 @@ compile_for:
     CHECK_ERROR (compile_for_return)
     call compile_expr
     CHECK_ERROR (compile_for_return)
-    li a0, OP_GT
-    call emit_word
+    call skip_parse_spaces
     CHECK_ERROR (compile_for_return)
-    li a0, OP_JUMP_Z_ABS
-    call emit_word
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_for_bad_source)
+    lbu t1, 0(t0)
+    li t2, 44
+    beq t1, t2, compile_for_explicit_step
+    li t2, 59
+    beq t1, t2, compile_for_normative_default
+    # Isolated migration path for the seven original fixtures:
+    # FOR variable=start,limit DO statement.
+    li s1, 0
+    li s2, 0
+    call consume_do
     CHECK_ERROR (compile_for_return)
-    la t0, bc_ptr
-    lw t1, 0(t0)
-    sw t1, 16(sp)
-    li a0, 0
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    li a0, OP_JUMP_ABS
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    la t0, bc_ptr
-    lw t1, 0(t0)
-    sw t1, 8(sp)
-    li a0, 0
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    la t0, bc_ptr
-    lw t1, 0(t0)
-    lw t2, 16(sp)
-    mv a0, t2
-    mv a1, t1
-    call patch_word
+    j compile_for_emit
+compile_for_explicit_step:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call compile_expr
     CHECK_ERROR (compile_for_return)
     call skip_parse_spaces
     CHECK_ERROR (compile_for_return)
-    call consume_do
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_for_bad_source)
+    lbu t1, 0(t0)
+    li t2, 59
+    bne t1, t2, compile_for_bad_source
+    li s1, 1
+    j compile_for_consume_body_separator
+compile_for_normative_default:
+    li s1, 0
+compile_for_consume_body_separator:
+    li s2, 1
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+    call skip_parse_spaces
     CHECK_ERROR (compile_for_return)
+    call is_parse_statement_end
+    CHECK_ERROR (compile_for_return)
+    bnez a0, compile_for_bad_source
+compile_for_emit:
+    li a0, OP_FOR_ENTER
+    call emit_word
+    CHECK_ERROR (compile_for_return)
+    mv a0, s0
+    call emit_word
+    CHECK_ERROR (compile_for_return)
+    mv a0, s1
+    call emit_word
+    CHECK_ERROR (compile_for_return)
+    # The body starts immediately after the two remaining address operands.
+    lw t0, bc_ptr
+    addi a0, t0, 12
+    call emit_word
+    CHECK_ERROR (compile_for_return)
+    lw t0, bc_ptr
+    sw t0, 16(sp)
+    li a0, 0
+    call emit_word
+    CHECK_ERROR (compile_for_return)
+    lw t0, bc_ptr
+    sw t0, 20(sp)
+    li a0, 0
+    call emit_word
+    CHECK_ERROR (compile_for_return)
+    # Normative FOR owns every statement through the physical-line end.
+    # Recursive use makes nested FOR bodies close in LIFO order without an AST.
+    beqz s2, compile_for_legacy_body
+    call compile_physical_line
+    j compile_for_body_done
+compile_for_legacy_body:
     call compile_statement
+compile_for_body_done:
     CHECK_ERROR (compile_for_return)
-    li a0, OP_PUSH_V
-    call emit_word
+    lw t1, bc_ptr
+    lw a0, 16(sp)
+    mv a1, t1
+    call patch_word
     CHECK_ERROR (compile_for_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    li a0, OP_PUSH_F
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    li a0, 1
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    li a0, OP_ADD
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    li a0, OP_STORE_V
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    lw a0, 4(sp)
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    li a0, OP_JUMP_ABS
-    call emit_word
-    CHECK_ERROR (compile_for_return)
-    lw a0, 12(sp)
+    li a0, OP_FOR_NEXT
     call emit_word
     CHECK_ERROR (compile_for_return)
     la t0, bc_ptr
     lw t1, 0(t0)
-    lw t2, 8(sp)
-    mv a0, t2
+    lw a0, 20(sp)
     mv a1, t1
     call patch_word
     CHECK_ERROR (compile_for_return)
@@ -2479,7 +2500,10 @@ compile_for_bad_source:
     call error_syntax
 compile_for_return:
     lw ra, 0(sp)
-    addi sp, sp, 32
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 48
     ret
 # Normative expression path. Comparisons remain only for the existing legacy
 # IF/FOR callers; arithmetic levels below implement the v1.2 precedence.
@@ -3248,6 +3272,14 @@ vm_not_do:
     bne s1, t1, vm_not_return
     j vm_return
 vm_not_return:
+    li t1, OP_FOR_ENTER
+    bne s1, t1, vm_not_for_enter
+    j vm_for_enter
+vm_not_for_enter:
+    li t1, OP_FOR_NEXT
+    bne s1, t1, vm_not_for_next
+    j vm_for_next
+vm_not_for_next:
     li t1, OP_PRINT_S
     bne s1, t1, safety_near_33
     j vm_print_s
@@ -3650,6 +3682,16 @@ vm_do:
     j vm_loop
 vm_return:
     call do_return_top
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_for_enter:
+    mv a0, s0
+    call for_enter
+    CHECK_ERROR (vm_run_return)
+    j vm_loop
+vm_for_next:
+    mv a0, s0
+    call for_next
     CHECK_ERROR (vm_run_return)
     j vm_loop
 vm_print_s:
@@ -4422,6 +4464,393 @@ symbol_store_ft0_return:
     lw s2, 12(sp)
     addi sp, sp, 48
     ret
+
+# Validate one 32-byte FOR context before it may affect pc or either control
+# depth. Layout: variable key, saved step bits, saved limit bits, body pc,
+# OP_FOR_NEXT pc, owner DO depth, OP_FOR_ENTER pc, integrity tag.
+validate_for_context:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    mv s0, a0
+    la t0, for_contexts
+    bltu s0, t0, validate_for_context_bad
+    la t1, for_contexts_end
+    bgeu s0, t1, validate_for_context_bad
+    sub t2, s0, t0
+    andi t2, t2, 31
+    bnez t2, validate_for_context_bad
+    lw t2, 0(s0)
+    lw t3, 4(s0)
+    xor t2, t2, t3
+    lw t3, 8(s0)
+    xor t2, t2, t3
+    lw t3, 12(s0)
+    xor t2, t2, t3
+    lw t3, 16(s0)
+    xor t2, t2, t3
+    lw t3, 20(s0)
+    xor t2, t2, t3
+    lw t3, 24(s0)
+    xor t2, t2, t3
+    li t3, FOR_CTX_TAG
+    xor t2, t2, t3
+    lw t3, 28(s0)
+    bne t2, t3, validate_for_context_bad
+    # A malformed key is a corrupt context, not a request to create a symbol.
+    lw a0, 0(s0)
+    srli t0, a0, 16
+    bnez t0, validate_for_context_bad
+    andi t0, a0, 255
+    li t1, 65
+    bltu t0, t1, validate_for_context_bad
+    li t1, 90
+    bgtu t0, t1, validate_for_context_bad
+    li t1, 70
+    beq t0, t1, validate_for_context_bad
+    srli t0, a0, 8
+    andi t0, t0, 255
+    beqz t0, vfc_key_ok
+    li t1, 48
+    bltu t0, t1, vfc_key_letter
+    li t1, 57
+    bleu t0, t1, vfc_key_ok
+vfc_key_letter:
+    li t1, 65
+    bltu t0, t1, validate_for_context_bad
+    li t1, 90
+    bgtu t0, t1, validate_for_context_bad
+vfc_key_ok:
+    # Saved arithmetic state must be finite and the saved step nonzero.
+    lw t0, 4(s0)
+    slli t1, t0, 1
+    beqz t1, validate_for_context_bad
+    srli t1, t1, 24
+    li t2, 255
+    beq t1, t2, validate_for_context_bad
+    lw t0, 8(s0)
+    slli t1, t0, 1
+    srli t1, t1, 24
+    li t2, 255
+    beq t1, t2, validate_for_context_bad
+    lw t0, 20(s0)
+    li t1, DO_MAX
+    bgtu t0, t1, validate_for_context_bad
+    lw t1, do_depth
+    li t2, DO_MAX
+    bgtu t1, t2, validate_for_context_bad
+    bgtu t0, t1, validate_for_context_bad
+    # Addresses are tied back to the exact emitted ENTER/NEXT pair.
+    la t0, bytecode_buf
+    lw t1, bc_ptr
+    bltu t1, t0, validate_for_context_bad
+    la t2, bytecode_end
+    bgtu t1, t2, validate_for_context_bad
+    lw t3, 24(s0)
+    andi t4, t3, 3
+    bnez t4, validate_for_context_bad
+    bltu t3, t0, validate_for_context_bad
+    bgeu t3, t1, validate_for_context_bad
+    lw t4, 0(t3)
+    li t5, OP_FOR_ENTER
+    bne t4, t5, validate_for_context_bad
+    lw t4, 0(s0)
+    lw t5, 4(t3)
+    bne t4, t5, validate_for_context_bad
+    lw t4, 8(t3)
+    li t5, 1
+    bgtu t4, t5, validate_for_context_bad
+    lw t4, 12(s0)
+    addi t5, t3, 24
+    bne t4, t5, validate_for_context_bad
+    lw t5, 12(t3)
+    bne t4, t5, validate_for_context_bad
+    lw t5, 16(s0)
+    andi t6, t5, 3
+    bnez t6, validate_for_context_bad
+    bltu t5, t4, validate_for_context_bad
+    bgeu t5, t1, validate_for_context_bad
+    lw t6, 16(t3)
+    bne t5, t6, validate_for_context_bad
+    lw t6, 0(t5)
+    li t2, OP_FOR_NEXT
+    bne t6, t2, validate_for_context_bad
+    addi t6, t5, 4
+    bgeu t6, t1, validate_for_context_bad
+    lw t2, 20(t3)
+    bne t6, t2, validate_for_context_bad
+    j validate_for_context_return
+validate_for_context_bad:
+    call error_context
+validate_for_context_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    addi sp, sp, 32
+    ret
+
+# OP_FOR_ENTER has already been fetched at a0. Fetch and validate its complete
+# five-word operand block before consuming the VM values or changing state.
+for_enter:
+    ENTER_FRAME (96)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    sw s5, 24(sp)
+    sw s6, 28(sp)
+    sw s7, 32(sp)
+    mv s0, a0
+    call fetch_word
+    CHECK_ERROR (for_enter_return)
+    mv s1, a0
+    call fetch_word
+    CHECK_ERROR (for_enter_return)
+    mv s2, a0
+    call fetch_word
+    CHECK_ERROR (for_enter_return)
+    mv s3, a0
+    call fetch_word
+    CHECK_ERROR (for_enter_return)
+    mv s4, a0
+    call fetch_word
+    CHECK_ERROR (for_enter_return)
+    mv s5, a0
+    li t0, 1
+    bgtu s2, t0, for_enter_bad_context
+    mv a0, s1
+    call validate_symbol_key
+    CHECK_ERROR (for_enter_return)
+    la t0, bytecode_buf
+    lw t1, bc_ptr
+    bltu t1, t0, for_enter_bad_context
+    la t2, bytecode_end
+    bgtu t1, t2, for_enter_bad_context
+    andi t2, s0, 3
+    bnez t2, for_enter_bad_context
+    bltu s0, t0, for_enter_bad_context
+    bgeu s0, t1, for_enter_bad_context
+    lw t2, 0(s0)
+    li t3, OP_FOR_ENTER
+    bne t2, t3, for_enter_bad_context
+    addi t2, s0, 24
+    bne s3, t2, for_enter_bad_context
+    andi t2, s4, 3
+    bnez t2, for_enter_bad_context
+    bltu s4, s3, for_enter_bad_context
+    bgeu s4, t1, for_enter_bad_context
+    lw t2, 0(s4)
+    li t3, OP_FOR_NEXT
+    bne t2, t3, for_enter_bad_context
+    addi t2, s4, 4
+    bne s5, t2, for_enter_bad_context
+    bgeu s5, t1, for_enter_bad_context
+    # Atomically preflight the two or three expression results.
+    lw s6, vm_sp_ptr
+    andi t0, s6, 3
+    bnez t0, for_enter_underflow
+    la t0, vm_stack
+    bltu s6, t0, for_enter_underflow
+    la t1, vm_stack_end
+    bgtu s6, t1, for_enter_underflow
+    beqz s2, for_enter_two_values
+    li t2, 12
+    j for_enter_stack_size
+for_enter_two_values:
+    li t2, 8
+for_enter_stack_size:
+    sub t3, s6, t0
+    bltu t3, t2, for_enter_underflow
+    sub s7, s6, t2
+    lw t3, -4(s6)
+    sw t3, 48(sp)               # limit bits
+    beqz s2, for_enter_default_step
+    lw t3, -8(s6)
+    sw t3, 44(sp)               # step bits
+    lw t3, -12(s6)
+    sw t3, 40(sp)               # start bits
+    j for_enter_values_ready
+for_enter_default_step:
+    la t3, one_f
+    lw t3, 0(t3)
+    sw t3, 44(sp)
+    lw t3, -8(s6)
+    sw t3, 40(sp)
+for_enter_values_ready:
+    lw t0, 40(sp)
+    fmv.w.x ft0, t0
+    call type_validate_finite_ft0
+    CHECK_ERROR (for_enter_return)
+    lw t0, 44(sp)
+    fmv.w.x ft0, t0
+    call type_validate_finite_ft0
+    CHECK_ERROR (for_enter_return)
+    la t0, zero_f
+    flw ft1, 0(t0)
+    feq.s t0, ft0, ft1
+    bnez t0, for_enter_bad_math
+    lw t0, 48(sp)
+    fmv.w.x ft0, t0
+    call type_validate_finite_ft0
+    CHECK_ERROR (for_enter_return)
+    sw s7, vm_sp_ptr, t0
+    # The start value is stored even when the precheck selects zero iterations.
+    lw t0, 40(sp)
+    fmv.w.x ft0, t0
+    mv a0, s1
+    li a1, 0
+    li a2, 0
+    call symbol_store_ft0
+    CHECK_ERROR (for_enter_return)
+    lw t0, 40(sp)
+    fmv.w.x ft0, t0
+    lw t0, 44(sp)
+    fmv.w.x ft1, t0
+    lw t0, 48(sp)
+    fmv.w.x ft2, t0
+    la t0, zero_f
+    flw ft3, 0(t0)
+    flt.s t0, ft3, ft1
+    beqz t0, for_enter_negative_step
+    fle.s t0, ft0, ft2
+    beqz t0, for_enter_skip
+    j for_enter_push
+for_enter_negative_step:
+    fle.s t0, ft2, ft0
+    beqz t0, for_enter_skip
+for_enter_push:
+    lw s7, for_depth
+    li t0, FOR_MAX
+    bgtu s7, t0, for_enter_bad_context
+    beq s7, t0, for_enter_bad_context
+    lw t0, do_depth
+    li t1, DO_MAX
+    bgtu t0, t1, for_enter_bad_context
+    lw t1, for_context_sentinel
+    li t2, FOR_CTX_TAG
+    bne t1, t2, for_enter_bad_context
+    slli t1, s7, 5
+    la t2, for_contexts
+    add t2, t2, t1
+    la t3, for_contexts_end
+    addi t4, t2, FOR_CTX_SIZE
+    bgtu t4, t3, for_enter_bad_context
+    sw s1, 0(t2)
+    lw t3, 44(sp)
+    sw t3, 4(t2)
+    lw t4, 48(sp)
+    sw t4, 8(t2)
+    sw s3, 12(t2)
+    sw s4, 16(t2)
+    sw t0, 20(t2)
+    sw s0, 24(t2)
+    xor t3, s1, t3
+    xor t3, t3, t4
+    xor t3, t3, s3
+    xor t3, t3, s4
+    xor t3, t3, t0
+    xor t3, t3, s0
+    li t4, FOR_CTX_TAG
+    xor t3, t3, t4
+    sw t3, 28(t2)
+    addi s7, s7, 1
+    sw s7, for_depth, t0
+    sw s3, pc_ptr, t0
+    j for_enter_return
+for_enter_skip:
+    sw s5, pc_ptr, t0
+    j for_enter_return
+for_enter_underflow:
+    call error_vm_underflow
+    j for_enter_return
+for_enter_bad_math:
+    call error_math
+    j for_enter_return
+for_enter_bad_context:
+    call error_context
+for_enter_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    lw s5, 24(sp)
+    lw s6, 28(sp)
+    lw s7, 32(sp)
+    addi sp, sp, 96
+    ret
+
+# Increment the current public loop variable, retain the saved step/limit, and
+# either repeat the physical-line body or commit one checked context pop.
+for_next:
+    ENTER_FRAME (64)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    mv s0, a0
+    lw s1, for_depth
+    li t0, FOR_MAX
+    bgtu s1, t0, for_next_bad
+    beqz s1, for_next_bad
+    addi t0, s1, -1
+    slli t0, t0, 5
+    la t1, for_contexts
+    add s2, t1, t0
+    mv a0, s2
+    call validate_for_context
+    CHECK_ERROR (for_next_return)
+    lw t0, 16(s2)
+    bne s0, t0, for_next_bad
+    lw a0, 0(s2)
+    li a1, 0
+    li a2, 0
+    call symbol_find
+    CHECK_ERROR (for_next_return)
+    beqz a0, for_next_bad
+    mv s3, a0
+    flw ft0, 12(s3)
+    call type_validate_finite_ft0
+    CHECK_ERROR (for_next_return)
+    flw ft1, 4(s2)
+    fadd.s ft0, ft0, ft1
+    call type_validate_finite_ft0
+    CHECK_ERROR (for_next_return)
+    fsw ft0, 12(s3)
+    la t0, zero_f
+    flw ft2, 0(t0)
+    flt.s t0, ft2, ft1
+    flw ft2, 8(s2)
+    beqz t0, for_next_negative
+    fle.s t0, ft0, ft2
+    beqz t0, for_next_complete
+    lw t0, 12(s2)
+    sw t0, pc_ptr, t1
+    j for_next_return
+for_next_negative:
+    fle.s t0, ft2, ft0
+    beqz t0, for_next_complete
+    lw t0, 12(s2)
+    sw t0, pc_ptr, t1
+    j for_next_return
+for_next_complete:
+    addi s1, s1, -1
+    sw s1, for_depth, t0
+    j for_next_return
+for_next_bad:
+    call error_context
+for_next_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    addi sp, sp, 64
+    ret
+
 set_pc_to_first_line:
     lw t0, line_count
     li t1, MAX_LINES
@@ -4545,23 +4974,32 @@ set_pc_to_line_return:
 # Runtime line transfers first resolve the target, then atomically unwind only
 # those DO contexts which do not contain the selected canonical line.
 external_set_pc_to_line:
-    ENTER_FRAME (32)
+    ENTER_FRAME (48)
     sw ra, 0(sp)
     sw s0, 4(sp)
     sw s1, 8(sp)
+    sw s2, 12(sp)
     mv s0, a0
     call resolve_line_target
     CHECK_ERROR (external_set_pc_to_line_return)
     mv s1, a0
     mv a0, s0
-    call do_unwind_for_target
+    call do_candidate_for_target
     CHECK_ERROR (external_set_pc_to_line_return)
+    mv s2, a0
+    mv a0, s2
+    call for_candidate_for_external
+    CHECK_ERROR (external_set_pc_to_line_return)
+    # Both candidate stacks and the selected pc are now fully validated.
+    sw s2, do_depth, t0
+    sw a0, for_depth, t0
     sw s1, pc_ptr, t0
 external_set_pc_to_line_return:
     lw ra, 0(sp)
     lw s0, 4(sp)
     lw s1, 8(sp)
-    addi sp, sp, 32
+    lw s2, 12(sp)
+    addi sp, sp, 48
     ret
 
 external_set_pc_to_first_line:
@@ -4753,10 +5191,12 @@ do_call_return:
 
 # Explicit RETURN and natural boundary return share one checked pop operation.
 do_return_top:
-    ENTER_FRAME (32)
+    ENTER_FRAME (48)
     sw ra, 0(sp)
     sw s0, 4(sp)
     sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
     lw s0, do_depth
     li t0, DO_MAX
     bgtu s0, t0, drt_bad
@@ -4768,10 +5208,16 @@ do_return_top:
     mv a0, s1
     call validate_do_context
     CHECK_ERROR (do_return_top_return)
-    lw t0, 0(s1)
-    addi s0, s0, -1
-    sw s0, do_depth, t1
-    sw t0, pc_ptr, t1
+    lw s2, 0(s1)
+    addi s3, s0, -1
+    mv a0, s3
+    call for_candidate_for_do_return
+    CHECK_ERROR (do_return_top_return)
+    # A FOR owned by the leaving DO is discarded; a caller FOR suspended by
+    # this DO survives. Commit both depths only after every context validates.
+    sw a0, for_depth, t0
+    sw s3, do_depth, t0
+    sw s2, pc_ptr, t0
     j do_return_top_return
 drt_bad:
     call error_context
@@ -4779,13 +5225,14 @@ do_return_top_return:
     lw ra, 0(sp)
     lw s0, 4(sp)
     lw s1, 8(sp)
-    addi sp, sp, 32
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    addi sp, sp, 48
     ret
 
-# The target has already been resolved. Compute a candidate depth completely,
-# validating every popped/top context, and commit once so failures cannot cause
-# a partial unwind.
-do_unwind_for_target:
+# The target has already been resolved. Compute a candidate DO depth without
+# committing it, so a combined DO/FOR transfer can remain atomic.
+do_candidate_for_target:
     ENTER_FRAME (48)
     sw ra, 0(sp)
     sw s0, 4(sp)
@@ -4795,7 +5242,7 @@ do_unwind_for_target:
     mv s0, a0
     mv a0, s0
     call validate_canonical_line_key
-    CHECK_ERROR (do_unwind_for_target_return)
+    CHECK_ERROR (do_candidate_for_target_return)
     lw s1, do_depth
     li t0, DO_MAX
     bgtu s1, t0, duft_bad
@@ -4807,7 +5254,7 @@ duft_loop:
     add s2, t1, t0
     mv a0, s2
     call validate_do_context
-    CHECK_ERROR (do_unwind_for_target_return)
+    CHECK_ERROR (do_candidate_for_target_return)
     lw s3, 4(s2)
     lw t0, 8(s2)
     li t1, DO_KIND_LINE
@@ -4822,16 +5269,115 @@ duft_group:
     addi s1, s1, -1
     j duft_loop
 duft_commit:
-    sw s1, do_depth, t0
-    j do_unwind_for_target_return
+    mv a0, s1
+    j do_candidate_for_target_return
 duft_bad:
     call error_context
-do_unwind_for_target_return:
+do_candidate_for_target_return:
     lw ra, 0(sp)
     lw s0, 4(sp)
     lw s1, 8(sp)
     lw s2, 12(sp)
     lw s3, 16(sp)
+    addi sp, sp, 48
+    ret
+
+# Compatibility/testing entry point retaining Stage-12 checked DO-only commit.
+do_unwind_for_target:
+    ENTER_FRAME (16)
+    sw ra, 0(sp)
+    call do_candidate_for_target
+    CHECK_ERROR (do_unwind_for_target_return)
+    sw a0, do_depth, t0
+do_unwind_for_target_return:
+    lw ra, 0(sp)
+    addi sp, sp, 16
+    ret
+
+# A user line transfer retains an active FOR only while it remains suspended
+# inside a descendant DO. A direct transfer at the loop's owner depth exits it,
+# including a GOTO to the same physical line.
+for_candidate_for_external:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    mv s0, a0
+    li t0, DO_MAX
+    bgtu s0, t0, fcfe_bad
+    lw t1, do_depth
+    bgtu t1, t0, fcfe_bad
+    bgtu s0, t1, fcfe_bad
+    lw s1, for_depth
+    li t0, FOR_MAX
+    bgtu s1, t0, fcfe_bad
+fcfe_loop:
+    beqz s1, fcfe_done
+    addi t0, s1, -1
+    slli t0, t0, 5
+    la t1, for_contexts
+    add s2, t1, t0
+    mv a0, s2
+    call validate_for_context
+    CHECK_ERROR (for_candidate_for_external_return)
+    lw t0, 20(s2)
+    bgtu s0, t0, fcfe_done
+    addi s1, s1, -1
+    j fcfe_loop
+fcfe_done:
+    mv a0, s1
+    j for_candidate_for_external_return
+fcfe_bad:
+    call error_context
+for_candidate_for_external_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    addi sp, sp, 48
+    ret
+
+# RETURN/natural DO completion preserves caller loops (owner == new DO depth)
+# and discards only loops created inside the DO being left.
+for_candidate_for_do_return:
+    ENTER_FRAME (48)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    mv s0, a0
+    li t0, DO_MAX
+    bgtu s0, t0, fcfdr_bad
+    lw t1, do_depth
+    bgtu t1, t0, fcfdr_bad
+    bgeu s0, t1, fcfdr_bad
+    lw s1, for_depth
+    li t0, FOR_MAX
+    bgtu s1, t0, fcfdr_bad
+fcfdr_loop:
+    beqz s1, fcfdr_done
+    addi t0, s1, -1
+    slli t0, t0, 5
+    la t1, for_contexts
+    add s2, t1, t0
+    mv a0, s2
+    call validate_for_context
+    CHECK_ERROR (for_candidate_for_do_return_return)
+    lw t0, 20(s2)
+    bleu t0, s0, fcfdr_done
+    addi s1, s1, -1
+    j fcfdr_loop
+fcfdr_done:
+    mv a0, s1
+    j for_candidate_for_do_return_return
+fcfdr_bad:
+    call error_context
+for_candidate_for_do_return_return:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
     addi sp, sp, 48
     ret
 

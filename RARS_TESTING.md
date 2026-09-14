@@ -188,8 +188,8 @@ py -3 -B -m unittest discover -s tests/rars_safety -p "test_*.py" -v
 $LASTEXITCODE
 ```
 
-Успех: `Ran 15 tests`, `OK`, код 0. Это 91 реальный запуск RARS:
-69 низкоуровневых subtests, один ABI harness, 16 batch/REPL-сценариев и пять
+Успех: `Ran 15 tests`, `OK`, код 0. Это 107 реальных запусков RARS:
+85 низкоуровневых subtests, один ABI harness, 16 batch/REPL-сценариев и пять
 ASK nested-evaluator harness-сценариев.
 Harness добавляет только входную точку и тестовые данные во временную копию
 целевого ASM и вызывает его процедуры. Python не реализует семантику FOCAL
@@ -626,10 +626,66 @@ safety cases проверяют усечённые opcodes, kind/scope/depth/ret
 identity/offset границы строк и отсутствие частичного push/unwind. Python здесь
 остаётся только RARS driver, generator fixtures и механизмом assertions.
 
+## Нормативный FOR и стек контекстов (этап 13)
+
+```powershell
+py -3 -B -m unittest discover -s tests/rars_for -p "test_*.py" -v
+```
+
+Нормативная грамматика — `FOR variable=start[,step],limit; body` и точное
+сокращение `F`. `variable` является скалярной переменной общей таблицы
+символов; индексированная переменная и зарезервированное пространство имён `F`
+не допускаются. Выражения `start`, `step` и `limit` компилируются общим
+`compile_expr` и вычисляются ровно один раз при входе. Шаг по умолчанию равен
+Float32 `+1.0`; явные `+0.0` и `-0.0`, нечисла и бесконечности дают E15.
+
+Тело — вся последовательность операторов после обязательного `;` до конца
+текущей физической строки. Поэтому вложенный `FOR` рекурсивно владеет её
+остатком, `COMMENT` завершает тело вместе со строкой, а поздняя ошибка
+компиляции не допускает частичного выполнения. Старый
+`FOR variable=start,limit DO statement` сохранён только как изолированный
+compatibility path для исходных fixtures; он не меняет нормативный parser.
+
+Для положительного шага вход выполняется при `start <= limit`, для
+отрицательного — при `start >= limit`; предел включителен. Проверка выполняется
+до первой итерации, поэтому цикл может исполниться ноль раз и тогда не занимает
+контекст, но всё равно сохраняет `start` в переменной. После тела `OP_FOR_NEXT`
+читает текущее публичное значение переменной, добавляет сохранённый шаг,
+записывает результат и сравнивает его с сохранённым пределом. После нормального
+завершения переменная содержит первое значение за пределом диапазона.
+
+Компилятор выдаёт `OP_FOR_ENTER key,has_step,body_pc,next_pc,continuation_pc`,
+тело и `OP_FOR_NEXT`. Отдельный от RISC-V `sp`, VM stack и DO stack статический
+FOR stack имеет ровно 16 записей по 32 байта. Запись содержит key переменной,
+Float32 bits шага и предела, `body_pc`, адрес соответствующего `OP_FOR_NEXT`,
+`owner_do_depth`, адрес `OP_FOR_ENTER` и integrity tag. Перед изменением `pc` или
+depth проверяются tag, finite state, alignment, emitted bounds и взаимная
+согласованность ENTER/body/NEXT/continuation. Семнадцатый активный контекст даёт
+контролируемую E16 без записи за sentinel.
+
+DO-вызов из тела приостанавливает caller FOR. Обычный возврат DO сохраняет
+контексты вызывающей стороны и удаляет FOR, созданные внутри покидаемого DO.
+Пользовательский GOTO/IF сначала полностью разрешает line target, затем
+вычисляет кандидаты глубины обоих стеков и атомарно фиксирует DO depth, FOR
+depth и `pc`. Прямой переход из тела завершает цикл даже при цели на той же
+строке; переход внутри descendant DO сохраняет caller FOR, пока остаётся в
+этом DO, а внешний переход снимает и DO, и зависимые FOR. Внутренние абсолютные
+VM-переходы FOR stack не разматывают.
+
+Dedicated suite работает через настоящий RARS с exact stdout и проверяет шаги
+обоих знаков и дробные шаги, inclusive endpoint, zero iterations, итоговое
+значение переменной, one-time expressions, изменение loop variable в теле,
+first-two symbol identity, 16/17 уровней, вложенные циклы, immediate/stored/
+LOAD/batch, legacy fixture, ASK/TYPE/symbol state, DO/RETURN и GOTO/IF unwind,
+ошибки/QUIT cleanup, historical factorial/DO patterns и сохранение исходного
+текста. Low-level suite дополнительно проверяет усечённый ENTER, VM underflow,
+bad key, нулевой шаг, symbol/context capacity, sentinel, NEXT без контекста,
+нефинитный increment, повреждённые поля/tag/адреса и отсутствие частичного
+DO/FOR commit.
+
 ## Ограничения
 
 - значения внутри VM, literal parser, `ASK` и `TYPE` чисел используют Float32;
-- `FOR` поддерживает только шаг `+1`;
 - RARS REPL имеет 128 физических slots по 127 байт текста плюс NUL;
 - RUN всё ещё ограничен 8191 байтом сериализованного исходника плюс NUL;
   при превышении выдаёт ошибку, хотя LIST/WRITE/SAVE доступны для всей программы;

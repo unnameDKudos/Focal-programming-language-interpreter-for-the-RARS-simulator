@@ -26,6 +26,62 @@ def pointer_is(pointer, address):
     return f"lw t0, {pointer}\nla t1, {address}\nbne t0, t1, test_fail\n"
 
 
+def for_image(*, key=73, explicit_step=False):
+    """Emit one valid ENTER/HALT/NEXT/HALT FOR block into bytecode_buf."""
+    return f"""
+li a0, OP_FOR_ENTER
+call emit_word
+li a0, {key}
+call emit_word
+li a0, {1 if explicit_step else 0}
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 24
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 28
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 32
+call emit_word
+li a0, OP_HALT
+call emit_word
+li a0, OP_FOR_NEXT
+call emit_word
+li a0, OP_HALT
+call emit_word
+"""
+
+
+def empty_for_image(*, key=73):
+    """Emit a valid ENTER/NEXT/HALT block whose body emits zero words."""
+    return f"""
+li a0, OP_FOR_ENTER
+call emit_word
+li a0, {key}
+call emit_word
+li a0, 0
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 24
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 24
+call emit_word
+la a0, bytecode_buf
+addi a0, a0, 28
+call emit_word
+li a0, OP_FOR_NEXT
+call emit_word
+li a0, OP_HALT
+call emit_word
+"""
+
+
+def push_bits(bits):
+    return f"li t0, {bits}\nfmv.w.x ft0, t0\ncall vm_push_ft0\n"
+
+
 CASES = {
     "bytecode_last_word_and_overflow": """la t0, bytecode_end
 addi t0, t0, -4
@@ -444,6 +500,238 @@ lw t0, do_context_sentinel
 li t1, 0x444f4358
 bne t0, t1, test_fail
 """,
+    "for_enter_truncated_operands": """
+li a0, OP_FOR_ENTER
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_BC_ACCESS") + """
+lw t0, for_depth
+bnez t0, test_fail
+""",
+    "for_enter_stack_underflow_is_atomic": for_image() + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_VM_UNDERFLOW") + """
+lw t0, for_depth
+bnez t0, test_fail
+""" + pointer_is("vm_sp_ptr", "vm_stack"),
+    "for_enter_bad_symbol_key": for_image(key=70) + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_ARRAY") + """
+lw t0, for_depth
+bnez t0, test_fail
+""",
+    "for_zero_step_and_zero_iteration_do_not_push": for_image(explicit_step=True)
+    + push_bits("0x3f800000") + push_bits("0x80000000") + push_bits("0x40400000") + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_MATH") + """
+lw t0, for_depth
+bnez t0, test_fail
+call reset_runtime
+""" + for_image() + push_bits("0x40400000") + push_bits("0x40000000") + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+lw t0, error_code
+bnez t0, test_fail
+lw t0, for_depth
+bnez t0, test_fail
+li a0, 73
+li a1, 0
+li a2, 0
+call symbol_load_ft0
+fmv.x.w t0, ft0
+li t1, 0x40400000
+bne t0, t1, test_fail
+""",
+    "for_stack_capacity_and_sentinel": for_image() + push_bits("0x3f800000") * 2 + """
+li t0, FOR_MAX
+sw t0, for_depth, t1
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_CONTEXT") + """
+lw t0, for_depth
+li t1, FOR_MAX
+bne t0, t1, test_fail
+lw t0, for_context_sentinel
+li t1, FOR_CTX_TAG
+bne t0, t1, test_fail
+""",
+    "for_symbol_capacity_failure_does_not_push": for_image() + push_bits("0x3f800000") * 2 + """
+li t0, SYMBOL_MAX
+sw t0, symbol_count, t1
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_ARRAY") + """
+lw t0, for_depth
+bnez t0, test_fail
+""",
+    "for_next_without_context": """
+li a0, OP_FOR_NEXT
+call emit_word
+li a0, OP_HALT
+call emit_word
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_CONTEXT") + """
+lw t0, for_depth
+bnez t0, test_fail
+""",
+    "for_next_rejects_depth_above_limit": """
+li a0, OP_FOR_NEXT
+call emit_word
+li a0, OP_HALT
+call emit_word
+li t0, 17
+sw t0, for_depth, t1
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+""" + error_is("ERR_CONTEXT") + """
+lw t0, for_depth
+li t1, 17
+bne t0, t1, test_fail
+""",
+    "for_next_completion_pops_and_stores_out_of_range": for_image()
+    + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+lw t0, for_depth
+li t1, 1
+bne t0, t1, test_fail
+call vm_run
+lw t0, error_code
+bnez t0, test_fail
+lw t0, for_depth
+bnez t0, test_fail
+li a0, 73
+li a1, 0
+li a2, 0
+call symbol_load_ft0
+fmv.x.w t0, ft0
+li t1, 0x40000000
+bne t0, t1, test_fail
+""",
+    "for_empty_body_next_address_is_valid": empty_for_image()
+    + push_bits("0x3f800000") + push_bits("0x40400000") + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+lw t0, error_code
+bnez t0, test_fail
+lw t0, for_depth
+bnez t0, test_fail
+li a0, 73
+li a1, 0
+li a2, 0
+call symbol_load_ft0
+fmv.x.w t0, ft0
+li t1, 0x40800000
+bne t0, t1, test_fail
+lw t0, for_context_sentinel
+li t1, FOR_CTX_TAG
+bne t0, t1, test_fail
+""",
+    "for_increment_nonfinite_is_controlled": for_image(explicit_step=True)
+    + push_bits("0x7f7fffff") * 3 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+call vm_run
+""" + error_is("ERR_MATH") + """
+lw t0, for_depth
+li t1, 1
+bne t0, t1, test_fail
+""",
+    "for_context_corrupt_fields_are_rejected": for_image()
+    + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+li t0, 0x7f800000
+la t1, for_contexts
+sw t0, 4(t1)
+call vm_run
+""" + error_is("ERR_CONTEXT") + """
+lw t0, for_depth
+li t1, 1
+bne t0, t1, test_fail
+lw t0, for_context_sentinel
+li t1, FOR_CTX_TAG
+bne t0, t1, test_fail
+""",
+    "for_context_corrupt_body_next_owner_tag_and_continuation": for_image()
+    + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+la t0, bytecode_buf
+addi t0, t0, 1
+la a0, for_contexts
+sw t0, 12(a0)
+call validate_for_context
+""" + error_is("ERR_CONTEXT") + """
+call reset_runtime
+""" + for_image() + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+li t0, 0x7f800000
+la a0, for_contexts
+sw t0, 8(a0)
+call validate_for_context
+""" + error_is("ERR_CONTEXT") + """
+call reset_runtime
+""" + for_image() + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+la t0, bytecode_buf
+addi t0, t0, 29
+la a0, for_contexts
+sw t0, 16(a0)
+call validate_for_context
+""" + error_is("ERR_CONTEXT") + """
+call reset_runtime
+""" + for_image() + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+li t0, 17
+la a0, for_contexts
+sw t0, 20(a0)
+call validate_for_context
+""" + error_is("ERR_CONTEXT") + """
+call reset_runtime
+""" + for_image() + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+la a0, for_contexts
+sw zero, 28(a0)
+call validate_for_context
+""" + error_is("ERR_CONTEXT") + """
+call reset_runtime
+""" + for_image() + push_bits("0x3f800000") * 2 + """
+la t0, bytecode_buf
+sw t0, pc_ptr, t1
+call vm_run
+la t0, bytecode_buf
+sw t0, 20(t0)
+la a0, for_contexts
+call validate_for_context
+""" + error_is("ERR_CONTEXT"),
     "do_missing_target_push_is_atomic": """
 li a0, OP_HALT
 call emit_word
@@ -599,6 +887,10 @@ li t0, 1
 sw t0, do_depth, t1
 li t0, 0x12345678
 sw t0, do_contexts, t1
+li t0, 1
+sw t0, for_depth, t1
+li t0, 0x87654321
+sw t0, for_contexts, t1
 li a0, 9999
 call external_set_pc_to_line
 """ + error_is("ERR_LINES") + """
@@ -608,7 +900,95 @@ bne t0, t1, test_fail
 lw t0, do_contexts
 li t1, 0x12345678
 bne t0, t1, test_fail
+lw t0, for_depth
+li t1, 1
+bne t0, t1, test_fail
+lw t0, for_contexts
+li t1, 0x87654321
+bne t0, t1, test_fail
 """,
+    "corrupt_for_prevents_partial_do_for_transfer": """
+li a0, OP_NOP
+call emit_word
+li a0, OP_LINE_END
+call emit_word
+li a0, 202
+call emit_word
+li a0, OP_HALT
+call emit_word
+li t0, 1
+sw t0, line_count, t1
+li t0, 202
+sw t0, line_numbers, t1
+sw zero, line_offsets, t1
+li t0, 4
+sw t0, line_end_offsets, t1
+la t2, do_contexts
+la t0, bytecode_buf
+addi t0, t0, 12
+sw t0, 0(t2)
+li t1, DO_KIND_GROUP
+sw t1, 4(t2)
+li t3, 3
+sw t3, 8(t2)
+xor t4, t0, t1
+xor t4, t4, t3
+li t5, DO_CTX_TAG
+xor t4, t4, t5
+sw t4, 12(t2)
+li t0, 1
+sw t0, do_depth, t1
+sw t0, for_depth, t1
+li t1, 0x12345678
+sw t1, for_contexts, t2
+li a0, 202
+call external_set_pc_to_line
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, 1
+bne t0, t1, test_fail
+lw t0, for_depth
+bne t0, t1, test_fail
+""",
+    "do_return_validates_for_before_committing_depths": """
+li a0, OP_HALT
+call emit_word
+la t2, do_contexts
+la t0, bytecode_buf
+sw t0, 0(t2)
+li t1, DO_KIND_LINE
+sw t1, 4(t2)
+li t3, 101
+sw t3, 8(t2)
+xor t4, t0, t1
+xor t4, t4, t3
+li t5, DO_CTX_TAG
+xor t4, t4, t5
+sw t4, 12(t2)
+li t0, 1
+sw t0, do_depth, t1
+sw t0, for_depth, t1
+li t1, 0x12345678
+sw t1, for_contexts, t2
+call do_return_top
+""" + error_is("ERR_CONTEXT") + """
+lw t0, do_depth
+li t1, 1
+bne t0, t1, test_fail
+lw t0, for_depth
+bne t0, t1, test_fail
+""",
+    "reset_runtime_clears_both_control_depths": """
+li t0, 7
+sw t0, do_depth, t1
+li t0, 9
+sw t0, for_depth, t1
+call reset_runtime
+lw t0, do_depth
+bnez t0, test_fail
+lw t0, for_depth
+bnez t0, test_fail
+""" + error_is("0"),
     "corrupt_context_does_not_partially_unwind": """
 li a0, OP_NOP
 call emit_word
