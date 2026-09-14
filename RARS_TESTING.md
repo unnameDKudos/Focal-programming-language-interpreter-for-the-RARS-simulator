@@ -125,8 +125,9 @@ $LASTEXITCODE
 ```
 
 Можно использовать найденный `python.exe` вместо `py -3`; команда `python`
-не является обязательной. Проверенный baseline: Python 3.14.7, Java
-OpenJDK 17.0.20.1, RARS 1.6 в RV32, Git `34d09ae`. SHA-256 проверенного JAR:
+не является обязательной. Проверенный baseline: Python 3.14.7, Java 17 LTS,
+RARS 1.6 в RV32. Текущий Git HEAD runner выводит при каждом запуске. SHA-256
+проверенного JAR:
 
 ```text
 780F730EB457B1BA609E968ACCC2C8B77D8F92C3D9DBF30CC7FDB3CFB14E8C24
@@ -263,13 +264,15 @@ LIST и WRITE используют общий отсортированный о�
 WRITE/W g.ll, включая WRITE внутри исполняемой программы. Отсутствующая
 группа/строка — контролируемая ошибка; пустой просмотр ALL ничего не печатает.
 
-RUN использует тот же обход и formatter, но пока сохраняет ограниченный
-program_buf. Компилятор batch/embedded также разбирает канонические ключи,
-учитывает замену/удаление и упорядочивает строки до генерации wordcode.
-В line_numbers лежат канонические ключи; после успешной компиляции
-line_offsets содержит соответствующие байтовые смещения от bytecode_buf.
-До завершения первой фазы эта таблица временно содержит указатели
-на исходные операторы; VM допускается запускать только после проверки ошибки.
+RUN компилирует storage напрямую, без общей сериализации в `program_buf`.
+Первая фаза обходит active slots по canonical key, проверяет NUL и записывает
+`line_numbers` и временные ссылки на operator text. Вторая фаза компилирует
+каждый slot общим frontend, заменяет ссылки байтовыми смещениями в
+`line_offsets` и заполняет `line_end_offsets`. Поэтому все 128 строк по 127
+байт могут быть запущены и суммарный размер исходника не ограничен 8191 байтом.
+Компилятор batch/embedded остаётся на `compile_program` и также сортирует
+канонические ключи до генерации wordcode. VM запускается только после успешной
+компиляции всего wordcode image.
 
 Migration path для старых fixtures: целый номер N от 1 до 9801 временно
 принимается как порядковый номер среди 99 строк каждой группы:
@@ -324,8 +327,9 @@ py -3 -B -m unittest discover -s tests/rars_frontend -p "test_*.py" -v
 ```
 
 `compile_physical_line` является общей точкой компиляции одной физической
-FOCAL-строки для immediate-ввода и для строк `compile_program`. Последний путь
-одинаков для stored RUN, source после LOAD и embedded/batch программы. Frontend
+FOCAL-строки для immediate-ввода, `compile_program` и прямого stored compiler.
+Stored RUN/source после LOAD компилируются из `repl_texts`, embedded/batch — из
+`focal_program`; во всех случаях statement frontend один. Frontend
 последовательно вызывает прежний `compile_statement`, проверяет его лексическую
 границу и потребляет `;`. Пустые участки между разделителями ничего не
 генерируют. Весь immediate wordcode строится до запуска VM, поэтому ошибка
@@ -336,7 +340,7 @@ FOCAL-строки для immediate-ввода и для строк `compile_pro
 могут содержать `;`; предварительного split исходного текста нет. COMMENT/C
 точно распознаётся таблицей токенов и передвигает `parse_ptr` непосредственно
 до LF, CR или NUL. Поэтому comment-tail не разбирается и не может поглотить
-следующую физическую строку из `program_buf`.
+следующую физическую строку в связанном source span.
 
 LIST/WRITE/SAVE по-прежнему выводят сохранённый операторный текст без
 переписывания пробелов, регистра, `;` или COMMENT. `line_offsets` фиксируется
@@ -683,11 +687,50 @@ bad key, нулевой шаг, symbol/context capacity, sentinel, NEXT без �
 нефинитный increment, повреждённые поля/tag/адреса и отсутствие частичного
 DO/FOR commit.
 
+## Финальная приёмка frozen TZ v1.2 (этап 14)
+
+Единая нормативная точка запуска из корня репозитория:
+
+```powershell
+$env:RARS_JAR = 'C:\Users\Admin\Desktop\rars1_6\rars1_6.jar'
+py -3 -B tools/run_rars_profile_tests.py
+```
+
+`tests/rars_profile/manifest.json` — machine-readable ПМИ. Каждый обязательный
+сценарий задаёт ID, требования, вид, режим запуска, FOCAL source/fixture,
+точный stdout, ожидаемый код ошибки (для negative), ожидаемые файлы и основание
+oracle. Python только готовит временную копию ASM/fixtures, запускает настоящий
+RARS и сравнивает заранее зафиксированные результаты; FOCAL-семантики в runner
+нет. Обычные сравнения строго `exact`; режим `legacy-substring` остаётся только
+в отдельном семисценарном legacy runner.
+
+Runner до исполнения валидирует manifest и завершает работу non-zero, если
+mandatory < 40, negative < 10, REPL/file integration < 5, уникальных
+historical fixture programs < 6 либо
+не покрыты все FR-01..FR-26, AR-01..AR-06, REL-01..REL-05 и K-01..K-05.
+Отсутствующие Java/JAR/fixture — FAIL, не SKIP. Текущий корпус: 54 mandatory,
+25 negative, 11 integration, 9 historical executions из 7 уникальных
+historical fixture programs, mandatory skipped 0.
+
+Литературный корпус `fixtures/historical` содержит AT-H01, три входа AT-H02,
+AT-H03, AT-H04, AT-H05a, AT-H05b и AT-H06; паспорта книги/страниц/адаптаций
+лежат в manifest. AT-D01 загружает `fixtures/files/sort.focal` и действительно
+сортирует пять indexed values. AT-D02 проверяет exact bytes после
+SAVE→ERASE→LOAD. AT-E01..E25 проверяют diagnostic code, отсутствие RARS
+exception/timeout и recovery/state preservation там, где это требуется.
+AT-LARGE загружает 128 допустимых строк суммарно больше 8191 байта, выполняет
+RUN, сохраняет exact source и получает `42.0` без E06.
+
+Полный финальный прогон состоит из трёх независимых частей: Stage regression
+suites, legacy baseline 7/7 и profile acceptance. Compact traceability и
+десятиминутный сценарий защиты приведены в `ACCEPTANCE_MATRIX.md` и
+`RARS_QUICK_CHECK.md`.
+
 ## Ограничения
 
 - значения внутри VM, literal parser, `ASK` и `TYPE` чисел используют Float32;
 - RARS REPL имеет 128 физических slots по 127 байт текста плюс NUL;
-- RUN всё ещё ограничен 8191 байтом сериализованного исходника плюс NUL;
-  при превышении выдаёт ошибку, хотя LIST/WRITE/SAVE доступны для всей программы;
+- bytecode image ограничен 16384 байтами и диагностирует E01; это отдельный
+  исполняемый ресурс, не скрытый лимит общего stored source;
 - SAVE гарантирует контролируемую внутреннюю ошибку записи, но не откатывает
   внешнее содержимое уже частично записанного файла;

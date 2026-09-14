@@ -1,0 +1,1170 @@
+{
+  "schema_version": 1,
+  "profile": "FOCAL/RARS frozen TZ v1.2",
+  "comparison_default": "exact",
+  "notes": "Python prepares fixtures, launches RARS, compares predetermined outputs/files, and counts coverage; it does not parse or execute FOCAL semantics.",
+  "scenarios": [
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-01",
+      "title": "Frontend tokens, separators and COMMENT",
+      "requirements": [
+        "FR-01",
+        "FR-06",
+        "FR-07",
+        "FR-08",
+        "FR-09",
+        "FR-15",
+        "FR-25",
+        "AR-01",
+        "AR-02",
+        "AR-05",
+        "AR-06",
+        "K-01",
+        "K-02",
+        "K-05"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 s A=2;;SeT B=3;C ignore;SET A=99\n1.02 t \"sum=\",A+B,!;q\n"
+      },
+      "expected_stdout": "sum=5.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-02",
+      "title": "Numeric literals, brackets and precedence",
+      "requirements": [
+        "FR-17",
+        "FR-18",
+        "FR-19",
+        "AR-01",
+        "AR-02"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE .45,!,-.02,!,1.77E2,!,8.73E+02,!,2^3*4/2+1,!,[2+3]*<4-1>,!,2^-2,!,0^0,!;Q\n"
+      },
+      "expected_stdout": "0.45000002\n-0.020000001\n177.00002\n872.99994\n17.0\n15.0\n0.25\n1.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-03",
+      "title": "Two-character symbols and indexed round-even",
+      "requirements": [
+        "FR-20",
+        "FR-21"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 SET LongName=7;SET IX(2.5)=11;SET IX(3.5)=12\n1.02 TYPE longOther,!,IX(2),!,IX(4),!,UN,!\n1.03 Q\n"
+      },
+      "expected_stdout": "7.0\n11.0\n12.0\n0.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-04",
+      "title": "Required standard functions",
+      "requirements": [
+        "FR-22"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE FABS(-3),!,FSQT(9),!,FITR(-3.9),!,FSGN(-0.0),!;Q\n"
+      },
+      "expected_stdout": "3.0\n3.0\n-3.0\n0.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-05",
+      "title": "TYPE formats and persistent selection",
+      "requirements": [
+        "FR-09"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE %8.02,1.25,!,%5,-12.5,!,%,1000,!;Q\n"
+      },
+      "expected_stdout": "    1.25\n  -13\n1.0E+3\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-06",
+      "title": "ASK list evaluates profile expressions",
+      "requirements": [
+        "FR-10",
+        "FR-18",
+        "FR-20",
+        "FR-25"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 ASK \"X=\",X,\"Y=\",Y,!\n1.02 TYPE X,!,Y,!;Q\n"
+      },
+      "expected_stdout": "X=:Y=:\n5.0\n10.0\n",
+      "oracle_basis": "TZ rule",
+      "stdin": "2+3\n5*2\n"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-07",
+      "title": "Forward GOTO and canonical composite target",
+      "requirements": [
+        "FR-03",
+        "FR-04",
+        "FR-11",
+        "AR-03"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "2.01 TYPE \"B\",!;Q\n1.10 TYPE \"A\";GO 2.01\n1.20 TYPE \"BAD\",!\n"
+      },
+      "expected_stdout": "AB\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-08",
+      "title": "Sign IF omitted-branch fall-through",
+      "requirements": [
+        "FR-12",
+        "AR-03"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 IF (0) 9.99;TYPE \"Z\";IF (1) 9.99,9.98;TYPE \"P\",!\n1.02 Q\n"
+      },
+      "expected_stdout": "ZP\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-09",
+      "title": "FOR default and signed fractional steps",
+      "requirements": [
+        "FR-13",
+        "AR-04"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 FOR I=1,3;TYPE I,!\n1.02 FOR J=1,-.5,-1;TYPE J,!\n1.03 Q\n"
+      },
+      "expected_stdout": "1.0\n2.0\n3.0\n1.0\n0.5\n0.0\n-0.5\n-1.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-10",
+      "title": "DO line, group, explicit and natural return",
+      "requirements": [
+        "FR-14",
+        "AR-03",
+        "AR-04"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE \"X\";DO 2.10;TYPE \"Y\";DO 3;TYPE \"Z\";Q\n2.10 TYPE \"L\";RETURN;TYPE \"BAD\"\n3.01 TYPE \"A\"\n3.02 TYPE \"B\"\n"
+      },
+      "expected_stdout": "XLYABZ",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-11",
+      "title": "Argument-less GOTO starts at first line",
+      "requirements": [
+        "FR-11",
+        "FR-23"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 SET A=A+1;IF (A-2) 1.03,1.02\n1.02 TYPE A,!;Q\n1.03 GOTO\n"
+      },
+      "expected_stdout": "2.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-12",
+      "title": "VM stack accepts exactly 512 values",
+      "requirements": [
+        "REL-05",
+        "AR-02",
+        "AR-05",
+        "K-04"
+      ],
+      "kind": "positive",
+      "execution_mode": "harness",
+      "program": {
+        "harness": "vm_stack_capacity_512"
+      },
+      "expected_stdout": "PASS\n",
+      "oracle_basis": "TZ REL-05 fixed capacity"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AI-01",
+      "title": "Immediate state, QUIT return and recovery",
+      "requirements": [
+        "FR-02",
+        "FR-15",
+        "FR-23",
+        "REL-01"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "SET A=5\nTYPE A*2,!\nQUIT\nTYPE A,!\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > 10.0\n> > 5.0\n> ",
+      "oracle_basis": "TZ rule; explicit transcript"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AI-02",
+      "title": "Unordered edit, replacement, deletion, LIST and RUN",
+      "requirements": [
+        "FR-03",
+        "FR-04",
+        "FR-05",
+        "FR-23"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "2.10 TYPE \"DELETE\",!\n1.01 TYPE \"A\"\n1.1 TYPE \"OLD\"\n2.01 TYPE \"B\",!;Q\n1.10 TYPE \"C\"\n2.10\nLIST\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > > > > > > 1.01 TYPE \"A\"\n1.10 TYPE \"C\"\n2.01 TYPE \"B\",!;Q\n> ACB\n> ",
+      "oracle_basis": "TZ rule; explicit transcript"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AI-03",
+      "title": "CRLF LOAD, sorted LIST and RUN",
+      "requirements": [
+        "FR-03",
+        "FR-24",
+        "FR-25"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "LOAD mixed.focal\nLIST\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> Loaded\n> 1.01 TYPE \"A\"\n2.10 TYPE \"B\",!;Q\n> AB\n> ",
+      "oracle_basis": "TZ rule; explicit transcript",
+      "files": {
+        "mixed.focal": {
+          "inline": "2.10 TYPE \"B\",!;Q\r\n1.01 TYPE \"A\"\r\n"
+        }
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-D01",
+      "title": "Normative indexed sorting through LOAD",
+      "requirements": [
+        "FR-13",
+        "FR-21",
+        "FR-22",
+        "FR-24",
+        "FR-26",
+        "K-02"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "LOAD sort.focal\nLIST\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> Loaded\n> 1.01 S A(1)=5;S A(2)=1;S A(3)=4;S A(4)=2;S A(5)=3\n1.02 F P=1,4;F I=1,4;S X=A(I);S Y=A(I+1);S A(I)=(X+Y-FABS(X-Y))/2;S A(I+1)=(X+Y+FABS(X-Y))/2\n1.03 F I=1,5;T A(I),!\n1.04 Q\n> 1.0\n2.0\n3.0\n4.0\n5.0\n> ",
+      "oracle_basis": "TZ AT-D01; predetermined sorted sequence 1,2,3,4,5",
+      "files": {
+        "sort.focal": {
+          "fixture": "fixtures/files/sort.focal"
+        }
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-D02",
+      "title": "SAVE to ERASE to LOAD round trip",
+      "requirements": [
+        "FR-05",
+        "FR-20",
+        "FR-23",
+        "FR-24",
+        "REL-04",
+        "K-04"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "2.1 tYpE \"B\",!\n1.01 sEt LongName=7;TyPe \"A\",LO,!\nSAVE round.focal\nERASE\nTYPE LO,!\nLOAD round.focal\nLIST\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > > Saved\n> > 0.0\n> Loaded\n> 1.01 sEt LongName=7;TyPe \"A\",LO,!\n2.10 tYpE \"B\",!\n> A7.0\nB\n> ",
+      "oracle_basis": "TZ AT-D02; explicit canonical bytes",
+      "expected_files": {
+        "round.focal": {
+          "inline": "1.01 sEt LongName=7;TyPe \"A\",LO,!\n2.10 tYpE \"B\",!\n"
+        }
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AI-04",
+      "title": "LIST WRITE SAVE preserve operator text",
+      "requirements": [
+        "FR-06",
+        "FR-09",
+        "FR-16",
+        "FR-24"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "2.1 wRiTe 1.01;q\n1.01 sEt A=1;TyPe \"MiXeD\",A;C keep ; text\nLIST\nWRITE ALL\nWRITE 1\nWRITE 2.10\nSAVE preserve.focal\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > > 1.01 sEt A=1;TyPe \"MiXeD\",A;C keep ; text\n2.10 wRiTe 1.01;q\n> 1.01 sEt A=1;TyPe \"MiXeD\",A;C keep ; text\n2.10 wRiTe 1.01;q\n> 1.01 sEt A=1;TyPe \"MiXeD\",A;C keep ; text\n> 2.10 wRiTe 1.01;q\n> Saved\n> ",
+      "oracle_basis": "TZ FR-16/24 source preservation",
+      "expected_files": {
+        "preserve.focal": {
+          "inline": "1.01 sEt A=1;TyPe \"MiXeD\",A;C keep ; text\n2.10 wRiTe 1.01;q\n"
+        }
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-LARGE",
+      "title": "128-line stored RUN beyond 8191 bytes",
+      "requirements": [
+        "FR-03",
+        "FR-05",
+        "FR-23",
+        "REL-05",
+        "AR-03",
+        "AR-05",
+        "K-01",
+        "K-04"
+      ],
+      "kind": "integration",
+      "execution_mode": "repl",
+      "program": {
+        "inline": "LOAD large.focal\nRUN\nSAVE large-saved.focal\nWRITE 2.29\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> Loaded\n> 42.0\n> Saved\n> 2.29 TYPE 42,!;Q\n> ",
+      "oracle_basis": "TZ REL-05; 128 legal lines, each operator <=127 bytes, serialized size >8191",
+      "files": {
+        "large.focal": {
+          "generator": "large_valid_program"
+        }
+      },
+      "expected_files": {
+        "large-saved.focal": {
+          "same_as": "large.focal"
+        }
+      },
+      "timeout": 60
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H01",
+      "title": "Example 2.5 assignments and output",
+      "requirements": [
+        "FR-03",
+        "FR-08",
+        "FR-09",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h01_assignments.focal"
+      },
+      "stdin": "",
+      "expected_stdout": "3.05.02.0",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "14",
+        "pdf_page": "15",
+        "example": "2.5",
+        "adaptations": "No control or operator changes; the exact four-line listing is retained, with frozen TYPE numeric rendering."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H02-N",
+      "title": "Historical sign-IF: first value less",
+      "requirements": [
+        "FR-10",
+        "FR-12",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h02_sign_if.focal"
+      },
+      "stdin": "2\n5\n",
+      "expected_stdout": "ENTER TWO NUMBERS::4.05.0\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "42-43",
+        "pdf_page": "43-44",
+        "example": "sign-IF example",
+        "adaptations": "Russian prompt and equality message replaced with ASCII; external input is supplied by the batch harness; the six-line three-target sign-IF listing is otherwise retained."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H02-Z",
+      "title": "Historical sign-IF: equality",
+      "requirements": [
+        "FR-10",
+        "FR-12",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h02_sign_if.focal"
+      },
+      "stdin": "5\n5\n",
+      "expected_stdout": "ENTER TWO NUMBERS::NUMBERS EQUAL\n5.05.0\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "42-43",
+        "pdf_page": "43-44",
+        "example": "sign-IF example",
+        "adaptations": "Russian prompt and equality message replaced with ASCII; external input is supplied by the batch harness; the six-line three-target sign-IF listing is otherwise retained."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H02-P",
+      "title": "Historical sign-IF: first value greater",
+      "requirements": [
+        "FR-10",
+        "FR-12",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h02_sign_if.focal"
+      },
+      "stdin": "5\n2\n",
+      "expected_stdout": "ENTER TWO NUMBERS::5.04.0\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "42-43",
+        "pdf_page": "43-44",
+        "example": "sign-IF example",
+        "adaptations": "Russian prompt and equality message replaced with ASCII; external input is supplied by the batch harness; the six-line three-target sign-IF listing is otherwise retained."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H03",
+      "title": "Factorial pattern for N=5",
+      "requirements": [
+        "FR-06",
+        "FR-10",
+        "FR-13",
+        "FR-20",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h03_factorial.focal"
+      },
+      "stdin": "5\n",
+      "expected_stdout": "N:N-FAKTORIAL=1.2E+2\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "48",
+        "pdf_page": "49",
+        "example": "factorial pattern",
+        "adaptations": "The Cyrillic output label is replaced with ASCII; the exact ASK/NF/FOR algorithm is retained, with frozen TYPE rendering."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H04",
+      "title": "Example 2.36 DO one line",
+      "requirements": [
+        "FR-14",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h04_do_line.focal"
+      },
+      "stdin": "",
+      "expected_stdout": "XAYAZA",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "51-52",
+        "pdf_page": "52-53",
+        "example": "2.36",
+        "adaptations": "No source adaptation: the exact four-line example is retained; batch termination supplies the external execution wrapper."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H05A",
+      "title": "Example 2.37 DO group twice",
+      "requirements": [
+        "FR-14",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h05a_do_group.focal"
+      },
+      "stdin": "",
+      "expected_stdout": "5.0\n4.0\n3.0\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "52",
+        "pdf_page": "53",
+        "example": "2.37",
+        "adaptations": "Canonical line spelling and frozen TYPE rendering only; two group calls and natural returns retained."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H05B",
+      "title": "Literary RETURN fragment",
+      "requirements": [
+        "FR-12",
+        "FR-14",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h05b_return.focal"
+      },
+      "stdin": "",
+      "expected_stdout": "VYHOD1 X=-1\nVYHOD2 X= 0\nKONEC\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "55",
+        "pdf_page": "56",
+        "example": "RETURN example",
+        "adaptations": "Russian output strings are transliterated to ASCII; the exact two-group listing, three DO calls, sign-IF, two explicit RETURNs and natural final return are retained with frozen %2 rendering."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-H06",
+      "title": "Harmonic fractional FOR for N=4",
+      "requirements": [
+        "FR-06",
+        "FR-10",
+        "FR-13",
+        "FR-18",
+        "FR-26",
+        "K-03"
+      ],
+      "kind": "historical",
+      "execution_mode": "batch",
+      "program": {
+        "fixture": "fixtures/historical/at_h06_harmonic.focal"
+      },
+      "stdin": "4.0\n",
+      "expected_stdout": "N:S=2.0833335E+0\n",
+      "oracle_basis": "Historical source + fixed book example",
+      "historical_passport": {
+        "book": "Осетинский Л. Г., Осетинский М. Г., Писаревский А. Н. «ФОКАЛ для микро- и мини-компьютеров», 1988",
+        "chapter": "2",
+        "printed_page": "56",
+        "pdf_page": "57",
+        "example": "harmonic-sum example",
+        "adaptations": "Russian COMMENT text is replaced with ASCII; external stdin is 4.0; the historical bare % format uses the frozen TYPE rendering. Operators, line numbers, J, ASK \"N\",N, S= label and natural program end are unchanged."
+      }
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E01-UNKNOWN",
+      "title": "Unknown statement",
+      "requirements": [
+        "FR-07",
+        "REL-01",
+        "REL-02",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 GOBLIN\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E10]: unknown statement\n",
+      "expected_error": "E10",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E02-NUMBER",
+      "title": "Invalid .00 line number",
+      "requirements": [
+        "FR-04",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.00 Q\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E14]: invalid line number or selector\n",
+      "expected_error": "E14",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E03-BRACKET",
+      "title": "Unmatched expression bracket",
+      "requirements": [
+        "FR-18",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE (1+2]\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E10]: invalid source\n",
+      "expected_error": "E10",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E04-STRING",
+      "title": "Unclosed TYPE string",
+      "requirements": [
+        "FR-09",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE \"OPEN\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E05]: string pool bounds\n",
+      "expected_error": "E05",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E05-SET",
+      "title": "Malformed SET",
+      "requirements": [
+        "FR-08",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 SET A=\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E10]: invalid source\n",
+      "expected_error": "E10",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E06-FOR",
+      "title": "Malformed FOR",
+      "requirements": [
+        "FR-13",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 FOR I=1;TYPE \"BAD\"\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E10]: invalid source\n",
+      "expected_error": "E10",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E07-IF",
+      "title": "Malformed IF",
+      "requirements": [
+        "FR-12",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 IF (1) 1.10,\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E10]: invalid source\n",
+      "expected_error": "E10",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E08-DO",
+      "title": "Malformed DO",
+      "requirements": [
+        "FR-14",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 DO\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E10]: invalid source\n",
+      "expected_error": "E10",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E09-GOTO-MISSING",
+      "title": "Missing GOTO target",
+      "requirements": [
+        "FR-11",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 GOTO 9.99\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E08]: line not found\n",
+      "expected_error": "E08",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E10-IF-MISSING",
+      "title": "Missing selected IF target",
+      "requirements": [
+        "FR-12",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 IF (1) 1.10,1.20,9.99\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E08]: line not found\n",
+      "expected_error": "E08",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E11-DO-MISSING",
+      "title": "Missing DO target",
+      "requirements": [
+        "FR-14",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 DO 9.99\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E08]: line not found\n",
+      "expected_error": "E08",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E12-RETURN",
+      "title": "RETURN outside DO",
+      "requirements": [
+        "FR-14",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 RETURN\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E16]: invalid DO/RETURN context\n",
+      "expected_error": "E16",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E13-DIVZERO",
+      "title": "Division by zero",
+      "requirements": [
+        "FR-18",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE 1/0\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E15]: invalid arithmetic operation\n",
+      "expected_error": "E15",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E14-POWERZERO",
+      "title": "Zero base with negative exponent",
+      "requirements": [
+        "FR-19",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE 0^-1\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E15]: invalid arithmetic operation\n",
+      "expected_error": "E15",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E15-FRACPOWER",
+      "title": "Fractional exponent",
+      "requirements": [
+        "FR-19",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE 2^1.5\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E15]: invalid arithmetic operation\n",
+      "expected_error": "E15",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E16-FSQT",
+      "title": "Negative FSQT",
+      "requirements": [
+        "FR-22",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE FSQT(-1)\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E15]: invalid arithmetic operation\n",
+      "expected_error": "E15",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E17-SYMBOLS",
+      "title": "513th symbol is controlled",
+      "requirements": [
+        "FR-21",
+        "REL-03",
+        "REL-05",
+        "AR-05"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "generator": "symbol_overflow_513"
+      },
+      "expected_stdout": "FOCAL/RARS error [E09]: variable/array bounds\n",
+      "expected_error": "E09",
+      "oracle_basis": "TZ REL-03 diagnostic contract",
+      "timeout": 60
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E18-VMSTACK",
+      "title": "513th VM value is controlled",
+      "requirements": [
+        "REL-03",
+        "REL-05",
+        "AR-02",
+        "AR-05"
+      ],
+      "kind": "negative",
+      "execution_mode": "harness",
+      "program": {
+        "harness": "vm_stack_overflow_513"
+      },
+      "expected_stdout": "FOCAL/RARS error [E03]: VM stack overflow\n",
+      "expected_error": "E03",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E19-DO-DEPTH",
+      "title": "17th DO context is controlled",
+      "requirements": [
+        "FR-14",
+        "REL-03",
+        "REL-05",
+        "AR-04",
+        "AR-05"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "generator": "do_depth_17"
+      },
+      "expected_stdout": "FOCAL/RARS error [E16]: invalid DO/RETURN context\n",
+      "expected_error": "E16",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E20-FOR-DEPTH",
+      "title": "17th FOR context is controlled",
+      "requirements": [
+        "FR-13",
+        "REL-03",
+        "REL-05",
+        "AR-04",
+        "AR-05"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "generator": "for_depth_17"
+      },
+      "expected_stdout": "FOCAL/RARS error [E16]: invalid DO/RETURN context\n",
+      "expected_error": "E16",
+      "oracle_basis": "TZ REL-03 diagnostic contract",
+      "timeout": 60
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E21-STEP-ZERO",
+      "title": "FOR zero step",
+      "requirements": [
+        "FR-13",
+        "REL-03"
+      ],
+      "kind": "negative",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 FOR I=1,0,3;TYPE \"BAD\"\n"
+      },
+      "expected_stdout": "FOCAL/RARS error [E15]: invalid arithmetic operation\n",
+      "expected_error": "E15",
+      "oracle_basis": "TZ REL-03 diagnostic contract"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E22-STORAGE",
+      "title": "129th loaded line rejected atomically",
+      "requirements": [
+        "FR-24",
+        "REL-03",
+        "REL-04",
+        "REL-05",
+        "K-04"
+      ],
+      "kind": "negative",
+      "integration": true,
+      "execution_mode": "repl",
+      "program": {
+        "inline": "1.01 TYPE \"KEEP\",!;Q\nLOAD too-many.focal\nLIST\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > FOCAL/RARS error [E08]: line table/storage bounds\n> 1.01 TYPE \"KEEP\",!;Q\n> KEEP\n> ",
+      "expected_error": "E08",
+      "oracle_basis": "TZ REL-03/REL-04 exact recovery transcript",
+      "files": {
+        "too-many.focal": {
+          "generator": "storage_overflow_129"
+        }
+      },
+      "timeout": 60
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E23-BYTECODE",
+      "title": "Bytecode overflow preserves loaded source",
+      "requirements": [
+        "REL-03",
+        "REL-04",
+        "REL-05",
+        "AR-05"
+      ],
+      "kind": "negative",
+      "integration": true,
+      "execution_mode": "repl",
+      "program": {
+        "inline": "LOAD bytecode.focal\nRUN\nWRITE 1.01\nTYPE \"Alive\",!\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> Loaded\n> FOCAL/RARS error [E01]: bytecode capacity\n> 1.01 SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;SET A=A+1;COMMENT fill\n> Alive\n> ",
+      "expected_error": "E01",
+      "oracle_basis": "TZ REL-03/REL-04 exact recovery transcript",
+      "files": {
+        "bytecode.focal": {
+          "generator": "bytecode_overflow"
+        }
+      },
+      "timeout": 60
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E24-LOAD",
+      "title": "Missing LOAD preserves source and RUN",
+      "requirements": [
+        "FR-24",
+        "REL-01",
+        "REL-02",
+        "REL-03",
+        "REL-04",
+        "K-04"
+      ],
+      "kind": "negative",
+      "integration": true,
+      "execution_mode": "repl",
+      "program": {
+        "inline": "1.01 TYPE \"KEEP\",!;Q\nLOAD absent.focal\nLIST\nTYPE \"Alive\",!\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > FOCAL/RARS error [E12]: file I/O\n> 1.01 TYPE \"KEEP\",!;Q\n> Alive\n> KEEP\n> ",
+      "expected_error": "E12",
+      "oracle_basis": "TZ REL-03/REL-04 exact recovery transcript"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AT-E25-SAVE",
+      "title": "SAVE failure is controlled and source survives",
+      "requirements": [
+        "FR-24",
+        "REL-01",
+        "REL-02",
+        "REL-03",
+        "REL-04"
+      ],
+      "kind": "negative",
+      "integration": true,
+      "execution_mode": "repl",
+      "program": {
+        "inline": "1.01 TYPE \"KEEP\",!;Q\nSAVE absent/out.focal\nLIST\nRUN\nEXIT\n"
+      },
+      "expected_stdout": "FOCAL/RARS REPL. Enter HELP for commands.\n> > FOCAL/RARS error [E12]: file I/O\n> 1.01 TYPE \"KEEP\",!;Q\n> KEEP\n> ",
+      "expected_error": "E12",
+      "oracle_basis": "TZ REL-03/REL-04 exact recovery transcript"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
+      "id": "AP-13",
+      "title": "Exactly 512 symbol entries execute",
+      "requirements": [
+        "FR-21",
+        "REL-05",
+        "AR-05"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "generator": "symbol_capacity_512"
+      },
+      "expected_stdout": "OK\n",
+      "oracle_basis": "TZ REL-05 fixed capacity",
+      "timeout": 60
+    }
+  ]
+}

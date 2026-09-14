@@ -1,76 +1,87 @@
 # Архитектура RARS-интерпретатора FOCAL
 
-## Общая схема
+Нормативный путь выполняется целиком в RV32-коде:
 
-Интерпретатор внутри RARS работает в два этапа:
+```text
+FOCAL source -> compiler -> 32-bit wordcode -> stack VM
+```
 
-1. FOCAL-текст из буфера программы компилируется в байткод.
-2. Байткод выполняется стековой виртуальной машиной.
+Python не участвует в пользовательском исполнении и не является semantic
+oracle; в automated suites он только запускает RARS и проверяет результаты.
 
-Такой подход отделяет разбор исходного текста от исполнения и соответствует
-учебной задаче: показать трансляцию, распределение памяти и VM-интерпретацию на
-ассемблере RISC-V.
+## Память и исходный текст
 
-## Память
+- `repl_numbers[128]` и `repl_texts[128][128]` — active key и 127 байт
+  operator text плюс NUL; нулевой key означает свободный slot.
+- `program_buf[8192]` — ограниченная служебная область legacy/import harness;
+  production RUN, LIST, WRITE и SAVE от неё не зависят.
+- `focal_program` — contiguous embedded/batch source.
+- `line_numbers`, `line_offsets`, `line_end_offsets` — canonical key,
+  смещение начала wordcode и смещение конца каждой физической строки.
+- `bytecode_buf[16384]` и `str_pool[4096]` — wordcode и строковые константы.
+- `symbol_table[512]` — общая таблица scalar/indexed Float32 entries.
+- `vm_stack[512]`, `do_stack[16]`, `for_stack[16]` — независимые стеки VM,
+  вызовов и циклов. Процедурный RISC-V `sp` имеет отдельный guard.
 
-- `program_buf` — строки, введенные в RARS REPL.
-- `file_name` — имя файла для команд `LOAD` и `SAVE`.
-- `repl_numbers` — номера строк, введенных в RARS REPL.
-- `repl_texts` — фиксированные слоты текста строк RARS REPL.
-- `focal_program` — встроенная программа для batch/demo режима.
-- `bytecode_buf` — буфер байткода.
-- `line_numbers` — номера строк FOCAL.
-- `line_offsets` — адреса начала байткода для соответствующих строк.
-- `vm_stack` — стек float-операндов VM.
-- `vars` — 26 float-переменных `A-Z`.
-- `arrays` — массивы `A(i)`, по 100 float-элементов на букву.
-- `str_pool` — пул строковых констант для `TYPE` и `ASK`.
+LOAD читает файл блоками, собирает одну physical line, валидирует и помещает её
+в транзакционное storage; ошибка восстанавливает snapshot. LIST/WRITE/SAVE
+обходят active slots напрямую в порядке canonical key. SAVE пишет номер `g.ll`,
+пробел, неизменённый operator text и LF.
 
-## VM
+## Компиляция
 
-VM использует:
+Immediate source связывается с bounded `input_line`; embedded source — с
+`focal_program`. Stored RUN использует `compile_stored_program` без общей
+сериализации: первая фаза сортированно собирает keys и проверенные pointers на
+slots, вторая связывает отдельный 128-байтный parse span, вызывает общий
+`compile_physical_line`, заменяет pointer на wordcode offset и записывает
+`line_end_offsets`. Поэтому полные 128 x 127 bytes доступны RUN независимо от
+размера `program_buf`.
 
-- `pc_ptr` — текущий адрес инструкции байткода;
-- `vm_sp_ptr` — вершина стека операндов;
-- opcodes фиксированной ширины: opcode и операнды хранятся как 32-битные слова.
+`compile_physical_line` является общей грамматической точкой для immediate,
+stored/LOAD и batch. Он компилирует все statements до выполнения, обрабатывает
+`;`, пустые statements и COMMENT. Late compile error не оставляет частичного
+вывода/перехода. GOTO/IF/DO operands хранят canonical line key и разрешаются по
+единой таблице compiled line offsets.
 
-Поддерживаются opcodes:
+## Wordcode и VM
 
-- `PUSH_F`, `PUSH_V`, `STORE_V`;
-- `PUSH_ARR`, `STORE_ARR`;
-- `ADD`, `SUB`, `MUL`, `DIV`, `NEG`;
-- `EQ`, `NE`, `LT`, `LE`, `GT`, `GE`;
-- `JUMP`, `JUMP_Z`, `JUMP_NZ`, внутренние absolute jumps;
-- `PRINT_S`, `PRINT_F`, `PRINT_NL`, `READ_F`;
-- `HALT`.
+Каждый opcode и operand — 32-битное слово. Реализованы семейства:
 
-## REPL
+- literals, symbol/indexed load/store, string references;
+- Float32 `+`, `-`, `*`, `/`, unary sign, integer `^`;
+- FABS, FSQT, FITR, FSGN;
+- TYPE string/number/newline/format и runtime ASK;
+- internal absolute jumps, user line transfer и sign branch;
+- DO enter/return и identity-bearing `OP_LINE_END`;
+- FOR enter/next with body/continuation metadata;
+- WRITE selectors, QUIT и HALT.
 
-RARS REPL читает строки через `ReadString`.
+Dispatch проверяет, что opcode и все operands выровнены и находятся в emitted
+диапазоне. Internal jumps валидируют wordcode address; user line-control сначала
+полностью разрешает selected target, затем атомарно вычисляет selective unwind
+DO/FOR и только после этого меняет `pc`/depth.
 
-Команды:
+DO context хранит return PC, canonical scope, kind и integrity tag. Natural
+line/group completion обрабатывает `OP_LINE_END`, explicit RETURN снимает один
+валидный context. FOR context хранит symbol key, Float32 step/limit, body/NEXT/
+continuation addresses, owner DO depth и tag. Нулевой/неfinite step и 17-й
+context диагностируются до небезопасной записи.
 
-- строка с номером — добавляется или заменяется в программном буфере;
-- строка, содержащая только номер, удаляет строку;
-- FOCAL-команда без номера — временно оборачивается во внутреннюю строку
-  `0: ...`, компилируется в байткод и сразу выполняется VM;
-- `RUN` / `GO` — компиляция буфера и запуск VM;
-- `LIST` — вывод буфера в порядке возрастания номеров;
-- `LOAD <file>` — чтение FOCAL-программы из файла через файловые ecall RARS,
-  очистка текущего буфера и импорт строк в `repl_numbers`/`repl_texts`;
-- `SAVE <file>` — сборка текущего буфера в `program_buf` и запись файла через
-  файловые ecall RARS;
-- `ERASE` — очистка буфера;
-- `HELP` — вывод справки по командам REPL;
-- `QUIT` — выход.
+## Ошибки и lifecycle
 
-Перед `LIST` и `RUN` строки из `repl_numbers`/`repl_texts` собираются в
-`program_buf` в порядке возрастания номеров.
+`reset_runtime` очищает transient compiler/VM state и оба control stacks, но не
+stored source, symbol table и persistent TYPE format. QUIT прекращает текущее
+FOCAL execution и возвращает REPL; EXIT завершает RARS. Error code sticky в
+рамках операции, а recovery начинается с чистого transient state. Все записи в
+статические области предваряются bounds checks; ожидаемые ошибки печатаются как
+`FOCAL/RARS error [Exx]: ...`, без RARS runtime exception.
 
-## Ограничения текущей реализации
+## Использование AI при разработке
 
-- числовые литералы пока целые;
-- `FOR` поддерживает шаг `+1`;
-- `LOAD` читает файл целиком в `program_buf`, поэтому размер загружаемого файла
-  ограничен размером буфера;
-- функции `FSQT`, `FABS`, `FSIN` и другие пока не перенесены в RARS VM.
+AI применялся как вспомогательный инструмент анализа требований, ревью ASM,
+подготовки тестовых сценариев и документации. Предложенные изменения проверяются
+автоматизированными exact-тестами целевого ASM на настоящем RARS 1.6, включая
+негативные resource/safety cases и литературный corpus. Python-прототип не
+используется как semantic oracle; ответственность за окончательный код,
+интерпретацию ТЗ и представление результатов остаётся у автора проекта.

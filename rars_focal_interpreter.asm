@@ -56,7 +56,6 @@ safety_near_6:
     j error_bc_access
 safety_near_7:
 .end_macro
-.eqv ERR_DEFERRED 13
 .eqv ERR_NUMBER 14
 .eqv ERR_MATH 15
 .eqv ERR_CONTEXT 16
@@ -322,7 +321,6 @@ kw_HELP: .asciz "HELP"
 kw_EXIT: .asciz "EXIT"
 number_text: .space 8
 msg_number: .asciz "FOCAL/RARS error [E14]: invalid line number or selector\n"
-msg_deferred: .asciz "FOCAL/RARS error [E13]: recognized statement not implemented yet\n"
 .text
 .globl main
 main:
@@ -416,16 +414,10 @@ repl_immediate:
     call repl_run_immediate
     j repl_loop
 repl_run:
-    call repl_build_program
-    CHECK_ERROR (repl_loop)
-    la t0, program_buf
-    lbu t1, 0(t0)
-    beqz t1, repl_no_program
+    lw t0, repl_line_count
+    beqz t0, repl_no_program
     call reset_runtime
-    la t0, program_buf
-    la t1, source_ptr
-    sw t0, 0(t1)
-    call compile_program
+    call compile_stored_program
     CHECK_ERROR (repl_loop)
     la t0, bytecode_buf
     la t1, pc_ptr
@@ -546,15 +538,11 @@ rri_execute:
 
 rri_bind_stored:
     # A line target cannot safely jump from an isolated temporary bytecode
-    # stream into stale offsets. Rebuild and compile stored source first, then
-    # append the already validated immediate line and start at that append
-    # point. line_numbers/line_offsets now belong to this same bytecode image.
-    call repl_build_program
-    CHECK_ERROR (rri_done)
+    # stream into stale offsets. Compile stored slots first, then append the
+    # already validated immediate line and start at that append point.
+    # line_numbers/line_offsets now belong to this same bytecode image.
     call reset_runtime
-    la t0, program_buf
-    sw t0, source_ptr, t1
-    call compile_program
+    call compile_stored_program
     CHECK_ERROR (rri_done)
     lw t0, bc_ptr
     sw t0, 4(sp)
@@ -732,7 +720,8 @@ safety_near_10:
     la a0, repl_texts
     add a0, a0, t1
     ret
-# RUN/SAVE retain the bounded 8-KiB staging buffer. LIST/WRITE stream directly.
+# Legacy bounded serializer retained for low-level buffer tests/import helpers.
+# RUN, LIST, WRITE and SAVE consume storage directly and never depend on it.
 repl_build_program:
     ENTER_FRAME (32)
     sw ra, 0(sp)
@@ -1356,6 +1345,106 @@ sl_done:
 program_exit:
     li a7, 10
     ecall
+
+# Compile the sorted REPL storage directly. Phase 1 validates every active slot
+# and records its canonical key plus bounded text pointer. Phase 2 replaces
+# those temporary pointers with wordcode offsets while emitting the program.
+# This keeps the 128 x 127-byte storage contract independent of program_buf.
+compile_stored_program:
+    ENTER_FRAME (32)
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    lw s4, repl_line_count
+    li t0, MAX_LINES
+    bgtu s4, t0, csp_bad_lines
+    li s0, 0
+    li s1, 0
+csp_collect:
+    mv a0, s0
+    li a1, 101
+    li a2, 9999
+    call find_next_slot
+    CHECK_ERROR (csp_done)
+    bltz a0, csp_collect_done
+    mv s0, a1
+    mv s2, a0
+    bgeu s1, s4, csp_bad_lines
+    mv a0, s2
+    call repl_text_addr
+    CHECK_ERROR (csp_done)
+    mv s3, a0
+    call check_slot_text
+    CHECK_ERROR (csp_done)
+    slli t0, s1, 2
+    la t1, line_numbers
+    add t1, t1, t0
+    sw s0, 0(t1)
+    la t1, line_offsets
+    add t1, t1, t0
+    sw s3, 0(t1)
+    addi s1, s1, 1
+    j csp_collect
+csp_collect_done:
+    bne s1, s4, csp_bad_lines
+    sw s1, line_count, t0
+    li s0, 0
+csp_emit_loop:
+    bgeu s0, s1, csp_halt
+    slli t0, s0, 2
+    la t1, line_offsets
+    add t1, t1, t0
+    lw s2, 0(t1)
+    mv a0, s2
+    li a1, LINE_LEN
+    call set_parse_span
+    CHECK_ERROR (csp_done)
+    slli t0, s0, 2
+    la t1, line_offsets
+    add t1, t1, t0
+    lw t2, bc_ptr
+    la t3, bytecode_buf
+    sub t2, t2, t3
+    sw t2, 0(t1)
+    call compile_physical_line
+    CHECK_ERROR (csp_done)
+    slli t0, s0, 2
+    la t1, line_end_offsets
+    add t1, t1, t0
+    lw t2, bc_ptr
+    la t3, bytecode_buf
+    sub t2, t2, t3
+    sw t2, 0(t1)
+    li a0, OP_LINE_END
+    call emit_word
+    CHECK_ERROR (csp_done)
+    slli t0, s0, 2
+    la t1, line_numbers
+    add t1, t1, t0
+    lw a0, 0(t1)
+    call emit_word
+    CHECK_ERROR (csp_done)
+    addi s0, s0, 1
+    j csp_emit_loop
+csp_halt:
+    li a0, OP_HALT
+    call emit_word
+    j csp_done
+csp_bad_lines:
+    call error_lines
+csp_done:
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    addi sp, sp, 32
+    ret
+
 # Two phases: collect canonical source identities, then emit in key order.
 # Until compilation succeeds, line_offsets holds bounded source pointers;
 # the emission pass replaces every entry with its actual wordcode address.
@@ -1684,11 +1773,6 @@ cs_do:
 cs_return:
     call compile_return
     CHECK_ERROR (compile_statement_return)
-    j cs_done
-cs_deferred:
-    li a0, ERR_DEFERRED
-    la a1, msg_deferred
-    call set_error
     j cs_done
 cs_set:
     call compile_set

@@ -1,0 +1,4 @@
+1.10 TYPE "X"
+1.20 DO 4.5;TYPE "Y"
+1.30 DO 4.5;TYPE "Z"
+4.50 TYPE "A"

@@ -1290,13 +1290,14 @@ test_fail:
                     + 'FOCAL/RARS error [E08]: line table/storage bounds\n> > AFTER\n> ')
         self.execute(self.source, expected, commands)
 
-    def test_run_buffer_overflow_keeps_source(self):
-        line = 'TYPE "' + 'x' * 116 + '",!'
-        commands = ''.join(f'{n} {line}\n' for n in range(1, 70))
-        commands += 'RUN\n' + ''.join(f'{n}\n' for n in range(2, 70)) + 'LIST\nQUIT\n'
-        expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n' + '> ' * 70
-                    + 'FOCAL/RARS error [E06]: program buffer bounds\n' + '> ' * 69
-                    + f'1.01 {line}\n> ')
+    def test_full_128_line_program_runs_without_staging_buffer(self):
+        comment = 'COMMENT ' + 'x' * 119
+        numbered = [f'{1 if index < 99 else 2}.{index + 1 if index < 99 else index - 98:02}'
+                    for index in range(128)]
+        commands = ''.join(f'{number} {comment}\n' for number in numbered[:-1])
+        commands += f'{numbered[-1]} TYPE 42,!;Q\nRUN\nEXIT\n'
+        expected = ('FOCAL/RARS REPL. Enter HELP for commands.\n' + '> ' * 129
+                    + '42.0\n> ')
         self.execute(self.source, expected, commands)
 
     def test_load_error_keeps_source(self):
