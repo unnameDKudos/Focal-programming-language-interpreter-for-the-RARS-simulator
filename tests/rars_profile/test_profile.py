@@ -1,4 +1,4 @@
-"""Structural tests for the independent frozen-profile acceptance manifest."""
+"""Structural tests for the independent TZ v1.2 acceptance manifest."""
 
 from copy import deepcopy
 from pathlib import Path

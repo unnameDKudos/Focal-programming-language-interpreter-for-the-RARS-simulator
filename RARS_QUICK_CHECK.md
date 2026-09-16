@@ -118,4 +118,4 @@ py -3 -B tools/run_rars_profile_tests.py
 
 Пользовательские границы: 128 active lines, 127 байт operator text, 512 symbol
 entries, VM stack 512, DO/FOR depth 16. RUN компилирует storage напрямую и не
-имеет прежнего ограничения суммарного source в 8191 байт.
+ограничивает суммарный stored source размером 8191 байт.

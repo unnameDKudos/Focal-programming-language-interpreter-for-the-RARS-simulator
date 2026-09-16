@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile": "FOCAL/RARS frozen TZ v1.2",
+  "profile": "FOCAL/RARS TZ v1.2",
   "comparison_default": "exact",
   "notes": "Python prepares fixtures, launches RARS, compares predetermined outputs/files, and counts coverage; it does not parse or execute FOCAL semantics.",
   "scenarios": [
@@ -426,7 +426,7 @@
         "printed_page": "14",
         "pdf_page": "15",
         "example": "2.5",
-        "adaptations": "No control or operator changes; the exact four-line listing is retained, with frozen TYPE numeric rendering."
+        "adaptations": "No control or operator changes; the exact four-line listing is retained, with project TYPE numeric rendering."
       }
     },
     {
@@ -540,7 +540,7 @@
         "printed_page": "48",
         "pdf_page": "49",
         "example": "factorial pattern",
-        "adaptations": "The Cyrillic output label is replaced with ASCII; the exact ASK/NF/FOR algorithm is retained, with frozen TYPE rendering."
+        "adaptations": "The Cyrillic output label is replaced with ASCII; the exact ASK/NF/FOR algorithm is retained, with project TYPE rendering."
       }
     },
     {
@@ -594,7 +594,7 @@
         "printed_page": "52",
         "pdf_page": "53",
         "example": "2.37",
-        "adaptations": "Canonical line spelling and frozen TYPE rendering only; two group calls and natural returns retained."
+        "adaptations": "Canonical line spelling and project TYPE rendering only; two group calls and natural returns retained."
       }
     },
     {
@@ -622,7 +622,7 @@
         "printed_page": "55",
         "pdf_page": "56",
         "example": "RETURN example",
-        "adaptations": "Russian output strings are transliterated to ASCII; the exact two-group listing, three DO calls, sign-IF, two explicit RETURNs and natural final return are retained with frozen %2 rendering."
+        "adaptations": "Russian output strings are transliterated to ASCII; the exact two-group listing, three DO calls, sign-IF, two explicit RETURNs and natural final return are retained with project %2 rendering."
       }
     },
     {
@@ -652,7 +652,7 @@
         "printed_page": "56",
         "pdf_page": "57",
         "example": "harmonic-sum example",
-        "adaptations": "Russian COMMENT text is replaced with ASCII; external stdin is 4.0; the historical bare % format uses the frozen TYPE rendering. Operators, line numbers, J, ASK \"N\",N, S= label and natural program end are unchanged."
+        "adaptations": "Russian COMMENT text is replaced with ASCII; external stdin is 4.0; the historical bare % format uses the defined TYPE rendering. Operators, line numbers, J, ASK \"N\",N, S= label and natural program end are unchanged."
       }
     },
     {

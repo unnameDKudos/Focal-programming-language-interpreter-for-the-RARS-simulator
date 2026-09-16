@@ -1233,9 +1233,8 @@ test_fail:
 
     def execute(self, source, expected, stdin=None, files=None):
         if stdin is not None and stdin.endswith('\nQUIT\n'):
-            # Stage 2 used a final bare QUIT solely as test-session teardown.
-            # FR-15/23 now require EXIT there; stored FOCAL QUIT and every
-            # safety assertion/expected output remain unchanged.
+            # QUIT returns to the REPL, so EXIT terminates the test process;
+            # stored FOCAL QUIT and every safety assertion remain unchanged.
             stdin = stdin.removesuffix('QUIT\n') + 'EXIT\n'
         with tempfile.TemporaryDirectory(prefix="focal-safety-") as directory:
             for name, content in (files or {}).items():
@@ -1304,8 +1303,8 @@ test_fail:
         for content, code, message in [
             ('1 QUIT\n2 ' + 'x' * 128 + '\n', 7, 'text buffer bounds'),
             (''.join(f'{n} QUIT\n' for n in range(1, 130)), 8, 'line table/storage bounds'),
-            # Stage 5 streams files beyond 8191 bytes; this is now rejected
-            # because its single physical line cannot fit, not by file size.
+            # This input is rejected because its single physical line cannot
+            # fit, not because of the total file size.
             ('x' * 8192, 7, 'text buffer bounds'),
             ('1 ' + 'x' * 256 + '\n', 7, 'text buffer bounds'),
         ]:

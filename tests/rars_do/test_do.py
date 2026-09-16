@@ -1,4 +1,4 @@
-"""Stage 12 DO/RETURN contracts executed by the real RARS target."""
+"""DO/RETURN contracts executed by the real RARS target."""
 
 import os
 from pathlib import Path
@@ -210,8 +210,8 @@ class DoTests(unittest.TestCase):
         self.batch(program.replace("ASK X", "SET X=4"), "S   5.0\nR   5.0\n")
 
     def test_historical_examples_2_36_2_37_and_return_pattern(self):
-        # Historical 2.36/2.37 concepts, adapted only to the frozen syntax and
-        # current TYPE rendering: one line and a group are natural routines.
+        # Historical 2.36/2.37 concepts, adapted only to the supported syntax
+        # and TYPE rendering: one line and a group are natural routines.
         line_and_group = (
             '1.01 TYPE "L";DO 2.20;TYPE "G";DO 3;TYPE !;Q\n'
             '2.20 TYPE "INE"\n'

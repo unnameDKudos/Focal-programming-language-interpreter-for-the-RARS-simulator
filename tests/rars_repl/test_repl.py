@@ -82,7 +82,7 @@ class ReplTests(unittest.TestCase):
         for token in ['DO', 'D']:
             with self.subTest(token=token):
                 self.session([('1 TYPE "NOT RUN",!', ''), (token, SYNTAX), ('Q', '')])
-        # WRITE is implemented in stage 4: viewing source is not executing it.
+        # WRITE displays stored source without executing it.
         for token in ['WRITE', 'W']:
             with self.subTest(token=token):
                 self.session([('1 TYPE "NOT RUN",!', ''), (token, '1.01 TYPE "NOT RUN",!\n'), ('Q', '')])

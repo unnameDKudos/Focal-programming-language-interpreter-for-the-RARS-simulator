@@ -1,4 +1,4 @@
-"""Stage 7 Float32 expression contracts against the real RARS target."""
+"""Float32 expression contracts against the real RARS target."""
 
 import os
 from pathlib import Path

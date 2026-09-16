@@ -1,4 +1,4 @@
-"""Stage 10 ASK contracts executed by the real RARS target."""
+"""ASK contracts executed by the real RARS target."""
 
 import os
 from pathlib import Path

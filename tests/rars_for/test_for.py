@@ -1,4 +1,4 @@
-"""Stage 13 normative FOR contracts executed by the real RARS target."""
+"""FOR profile contracts executed by the real RARS target."""
 
 import os
 from pathlib import Path

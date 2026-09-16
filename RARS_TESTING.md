@@ -40,7 +40,7 @@ SET/S, TYPE/T, ASK/A, GOTO/G/GO, IF/I, FOR/F, DO/D, RETURN/R, QUIT/Q, COMMENT/C,
 WRITE/W. `DO/D group` вызывает отсортированную группу, `DO/D g.ll` — одну
 физическую строку; `RETURN/R` досрочно завершает верхний вызов, а нормальный
 конец вызванной строки/группы возвращает управление автоматически. Нормативный
-`IF/I` является sign-IF; прежний внутристрочный DO доступен только в явно
+`IF/I` является sign-IF; внутристрочный DO доступен только в явно
 отделённой непарентезированной compatibility-грамматике IF/FOR.
 RUN, LIST, LOAD, SAVE и immediate execution сами по себе не очищают переменные.
 
@@ -140,14 +140,14 @@ Runner выводит путь Java, путь JAR, его SHA-256, иденти�
 Это семь **legacy baseline** тестов: `array_sum`, `for_sum`, `goto`, `hello`,
 `if`, `operators`, `sort`. Их expected-файлы исторически проверялись как
 подстроки, поэтому runner явно выбирает `legacy-substring`: после
-нормализации LF/CRLF применяется прежнее сравнение
+нормализации LF/CRLF применяется зафиксированное сравнение
 `expected.strip() in stdout.strip()`. Оно допускает дополнительный вывод
 программы и не доказывает полную корректность языка. Файлы ожиданий не изменены.
 
 В `tools/rars_test_support.py` отдельно предусмотрен режим `exact` (по
 умолчанию): сравнение полного stdout, с нормализацией только LF/CRLF, без
-удаления пробелов или последнего перевода строки. Будущие нормативные тесты
-не должны неявно наследовать legacy-режим. Self-tests драйвера не входят в
+удаления пробелов или последнего перевода строки. Profile acceptance tests
+не наследуют legacy-режим. Self-tests драйвера не входят в
 40 языковых сценариев ТЗ.
 
 Команда дочернего процесса: `java -jar <jar> nc me ae2 se3 <temporary.asm>`.
@@ -179,7 +179,7 @@ Failed: 0
 не SKIP. При невозможности начать прогон счётчики равны 0/0, явно указано,
 что тесты не выполнялись, и возвращается код 2.
 
-## Low-level safety suite (этап 2)
+## Low-level safety suite
 
 Отдельный прогон в том же окружении, из корня репозитория:
 
@@ -205,7 +205,7 @@ sticky-ошибка, сброс временного состояния и во�
 после ошибок RUN/LOAD; значения уже присвоенных переменных не откатываются.
 
 Все сравнения здесь `exact`. Для REPL runner получает `stdin_text`; без него
-сохраняется прежний `stdin=DEVNULL`. Ошибки ассемблирования/симуляции,
+используется `stdin=DEVNULL`. Ошибки ассемблирования/симуляции,
 неожиданный stderr и timeout остаются отказами. Файлы LOAD/SAVE создаются
 только во временном каталоге конкретного теста. Окружение не устанавливается
 и отсутствие Java/JAR не превращается в SKIP.
@@ -215,10 +215,10 @@ str_pool 4096 байт, program_buf 8192 байта (включая NUL), input_
 и блок файлового ввода по 256 байт, REPL slots по 128 байт. Отдельный лимит
 процедурного sp — 64 КиБ
 от выровненного стартового sp; он не относится к вычислительному стеку VM.
-Для сохранности исходника при ошибке существующего LOAD добавлена фиксированная
-резервная копия REPL storage; это не расширяет пользовательскую вместимость.
+Для сохранности исходника при ошибке LOAD используется фиксированная резервная
+копия REPL storage; это не расширяет пользовательскую вместимость.
 
-## Токены и lifecycle REPL (этап 3)
+## Токены и lifecycle REPL
 
 В настроенном окружении с `RARS_JAR`, из корня репозитория:
 
@@ -227,21 +227,20 @@ py -3 -B -m unittest discover -s tests/rars_repl -p "test_*.py" -v
 ```
 
 Все сценарии — end-to-end через настоящий RARS, с полным `exact`-сравнением
-stdout и прежней строгой проверкой stderr/exit code. Проверяются точные имена
+stdout и строгой проверкой stderr/exit code. Проверяются точные имена
 и сокращения, недопустимые префиксы, разделение environment/FOCAL dispatch,
 QUIT/Q и EXIT, ERASE, сохранность переменных и регистра исходника, HELP,
-а также токены в stored/LOAD и старых конструкциях IF/FOR. Python — только
-драйвер, не нормативный интерпретатор. Семантика будущих DO/RETURN
-этими тестами не утверждается.
+а также токены в stored/LOAD и compatibility-конструкциях IF/FOR. Python —
+только драйвер, не нормативный интерпретатор. DO/RETURN проверяется отдельным
+функциональным suite.
 
-Для safety suite этапа 2 адаптирован только teardown: последний отдельный
-`QUIT` во входе сеанса заменяется на `EXIT`. Это следствие нового FR-15/23;
-FOCAL QUIT внутри программ и проверки безопасности сохранены. На этапе 4
-точечно обновлены ожидаемые номера в LIST и canonical key в ABI harness.
+В safety suite teardown использует `EXIT`, поскольку `QUIT` возвращает
+управление REPL. FOCAL QUIT внутри программ и проверки безопасности сохранены;
+ожидаемые номера LIST и canonical key ABI соответствуют текущему формату.
 Не завершайте автоматический REPL-сеанс одним QUIT: он больше не закрывает
 процесс; конец stdin сам по себе также не служит командой выхода.
 
-## Номера, storage и просмотр (этап 4)
+## Номера, storage и просмотр
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_storage -p "test_*.py" -v
@@ -274,20 +273,19 @@ RUN компилирует storage напрямую, без общей сери�
 канонические ключи до генерации wordcode. VM запускается только после успешной
 компиляции всего wordcode image.
 
-Migration path для старых fixtures: целый номер N от 1 до 9801 временно
+Compatibility path для legacy fixtures: целый номер N от 1 до 9801
 принимается как порядковый номер среди 99 строк каждой группы:
 `1 -> 1.01`, `99 -> 1.99`, `100 -> 2.01`. То же преобразование используется
 для старых числовых целей GOTO/IF; fixtures demo/rars не переписаны.
 Это совместимость, не нормативная integer-only модель. В WRITE целое число
 всегда означает группу, а не legacy-номер строки.
 
-Новый suite использует только exact output настоящего RARS; дополнительный
-ASM harness проверяет ключи 101/110, адреса wordcode и ABI. В старых suites
-изменены конкретные ожидания canonical LIST, ключ ABI lookup и проверки
-прежней заглушки WRITE. Никакой нормализации фактического stdout или
-ослабления сравнения не добавлено.
+Suite использует только exact output настоящего RARS; дополнительный ASM
+harness проверяет ключи 101/110, адреса wordcode и ABI. Проверки canonical
+LIST, ABI lookup и WRITE используют текущий формат без нормализации stdout
+или ослабления сравнения.
 
-## Атомарный LOAD и канонический SAVE (этап 5)
+## Атомарный LOAD и канонический SAVE
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_files -p "test_*.py" -v
@@ -306,8 +304,8 @@ LOAD читает файл последовательными блоками п�
 снимок. Ошибка открытия происходит до изменения storage. Переменные и массивы
 LOAD не изменяет.
 
-SAVE не строит промежуточную копию в `program_buf`. Он использует общий со
-Stage 4 отсортированный обход, formatter `g.ll` и проверку slot, после чего
+SAVE не строит промежуточную копию в `program_buf`. Он использует общий
+отсортированный обход, formatter `g.ll` и проверку slot, после чего
 потоково записывает номер, пробел, неизменённый операторный текст и LF.
 Обрабатываются короткие записи syscall; нулевой или ошибочный результат даёт
 контролируемую E12. Пустая программа создаёт пустой файл. Внешний откат уже
@@ -320,7 +318,7 @@ Suite проверяет точный stdout настоящего RARS и точ
 используется только как драйвер и для fixture/file assertions, не как oracle
 семантики FOCAL.
 
-## Разделитель, COMMENT и единый frontend (этап 6)
+## Разделитель, COMMENT и единый frontend
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_frontend -p "test_*.py" -v
@@ -330,7 +328,7 @@ py -3 -B -m unittest discover -s tests/rars_frontend -p "test_*.py" -v
 FOCAL-строки для immediate-ввода, `compile_program` и прямого stored compiler.
 Stored RUN/source после LOAD компилируются из `repl_texts`, embedded/batch — из
 `focal_program`; во всех случаях statement frontend один. Frontend
-последовательно вызывает прежний `compile_statement`, проверяет его лексическую
+последовательно вызывает общий `compile_statement`, проверяет его лексическую
 границу и потребляет `;`. Пустые участки между разделителями ничего не
 генерируют. Весь immediate wordcode строится до запуска VM, поэтому ошибка
 позднего оператора не выполняет уже скомпилированный префикс.
@@ -345,11 +343,11 @@ Stored RUN/source после LOAD компилируются из `repl_texts`, 
 LIST/WRITE/SAVE по-прежнему выводят сохранённый операторный текст без
 переписывания пробелов, регистра, `;` или COMMENT. `line_offsets` фиксируется
 до вызова общего frontend и остаётся адресом начала numbered physical line.
-Новый exact suite проверяет empty operators, strings, COMMENT boundaries,
+Exact suite проверяет empty operators, strings, COMMENT boundaries,
 QUIT, отсутствие partial immediate execution, совпадение immediate/stored/
 LOAD/batch, сохранность source и отдельный ASM-тест line offset.
 
-## Числа, выражения, степень и функции (этап 7)
+## Числа, выражения, степень и функции
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_expr -p "test_*.py" -v
@@ -364,11 +362,11 @@ right-associative `^`; primary (literal, variable, function или grouping).
 
 Decimal scanner принимает целую, fixed-point и E/e формы, строит значение
 только Float32-инструкциями RARS и помещает raw IEEE-754 binary32 bits после
-`OP_PUSH_BITS`. Старый integer-конвертирующий `OP_PUSH_F` оставлен для прежнего
-служебного wordcode. Скобки `()`, `[]`, `<>` проверяются попарно; исходник не
+`OP_PUSH_BITS`. Integer-конвертирующий `OP_PUSH_F` применяется только в
+служебном wordcode. Скобки `()`, `[]`, `<>` проверяются попарно; исходник не
 переписывается.
 
-Добавлены `OP_POW`, `OP_ABS`, `OP_SQRT`, `OP_TRUNC`, `OP_SGN`. Степень
+VM реализует `OP_POW`, `OP_ABS`, `OP_SQRT`, `OP_TRUNC`, `OP_SGN`. Степень
 проверяет целочисленность показателя и использует exponentiation by squaring;
 отрицательный показатель вычисляется через reciprocal, `0^0` даёт 1.
 Деление на ноль, дробный показатель, `0` в отрицательной степени и отрицательный
@@ -380,7 +378,7 @@ Suite использует настоящий RARS и exact stdout, провер
 recovery и общий immediate/stored/LOAD/batch path. Python остаётся драйвером,
 не parser или semantic oracle.
 
-## Таблица символов и индексированные переменные (этап 8)
+## Таблица символов и индексированные переменные
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_symbols -p "test_*.py" -v
@@ -391,9 +389,9 @@ py -3 -B -m unittest discover -s tests/rars_symbols -p "test_*.py" -v
 первых двух символов в верхнем ASCII-регистре; отсутствующий второй символ
 кодируется нулём. Поэтому `A` и `AB` различны, а `AB`, `ABCDE` и `abOther`
 обозначают один symbol. Любое пользовательское имя с первым символом `F`
-отвергается; FABS, FSQT, FITR и FSGN распознаются прежним function parser.
+отвергается; FABS, FSQT, FITR и FSGN распознаются общим function parser.
 
-Старые `vars[26]` и `arrays[26][100]` заменены одной фиксированной таблицей из
+Переменные хранятся в одной фиксированной таблице из
 512 записей по 16 байт: canonical name key, scalar/indexed discriminator,
 signed int32 index и Float32 value. Scalar и каждый конкретный indexed element
 занимают отдельную запись. Lookup отсутствующего значения возвращает ноль и не
@@ -410,12 +408,12 @@ expression reads, существующий ASK и legacy FOR использую�
 
 Таблица сохраняется через immediate, RUN, LIST/WRITE, SAVE, LOAD и QUIT. LOAD
 меняет только source. `reset_runtime` очищает временное состояние, но не symbols;
-ERASE очищает source, таблицу и runtime state. Новый suite использует настоящий
+ERASE очищает source, таблицу и runtime state. Suite использует настоящий
 RARS и exact stdout, включая 512/513, persistence, source preservation,
 nearest-even, F-reservation и immediate/stored/LOAD/batch paths. Python остаётся
 только драйвером и генератором fixtures.
 
-## TYPE и числовые форматы (этап 9)
+## TYPE и числовые форматы
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_type -p "test_*.py" -v
@@ -442,7 +440,7 @@ FR-09 экспоненциальный формат используется к�
 Default до первой директивы сохраняет совместимый RARS `PrintFloat`. Явный
 формат хранится в persistent runtime state и действует на следующие числовые
 элементы и операторы, включая RUN, LOAD и возврат QUIT в REPL. Компиляция формат
-не меняет. ERASE, как полный сброс состояния по FR-23, и новый процесс
+не меняет. ERASE, как полный сброс состояния по FR-23, и запуск процесса
 восстанавливают default. Для fixed-формата принято детерминированное округление
 половин от нуля; FR-09 не требует точного округления конкретной исторической
 машины. `+0.0` и `-0.0` печатаются одинаково.
@@ -465,7 +463,7 @@ immediate/stored/LOAD/batch path. Low-level safety suite дополнитель�
 `OP_PRINT_F`. Python служит только драйвером и проверяет stdout/fixtures; вся
 семантика форматирования исполняется ASM в RARS.
 
-## Полноценный ASK (этап 10)
+## ASK и вычисление вводимых выражений
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_ask -p "test_*.py" -v
@@ -482,7 +480,7 @@ py -3 -B -m unittest discover -s tests/rars_ask -p "test_*.py" -v
 `ReadFloat`. После удаления внешних пробелов он компилируется существующим
 `compile_expr`; после выражения разрешены только пробелы и NUL/LF/CRLF.
 Следовательно, ASK наследует Float32 literals, арифметику, степень, функции,
-scalar/indexed reads и все E10/E15 semantics этапа 7 без второго parser.
+scalar/indexed reads и общую E10/E15 expression semantics без второго parser.
 
 `OP_ASK_V` и `OP_ASK_ARR` содержат canonical symbol key. Индексированный target
 сначала вычисляет индекс из исходного ASK statement и применяет общий
@@ -515,7 +513,7 @@ preservation и immediate/stored/LOAD/batch paths. Safety suite дополнит
 pc/bc/parser/stack на success/error и повторное использование временного кода.
 Python остаётся только драйвером и проверяет stdin/stdout/files.
 
-## GOTO и исторический sign-IF (этап 11)
+## GOTO и исторический sign-IF
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_control -p "test_*.py" -v
@@ -552,14 +550,14 @@ Immediate physical line сначала целиком компилируется
 проверенная immediate line добавляется в его хвост и запускается оттуда. Это
 позволяет `GOTO g.ll`, immediate sign-IF и `GO;...` безопасно переходить в
 stored program без stale offsets и сохраняет compile-before-run atomicity.
-После перехода остаток прежнего execution path естественно не исполняется.
-QUIT, ASK values, symbols и persistent TYPE format сохраняют прежний runtime
+После перехода остаток покинутого execution path естественно не исполняется.
+QUIT, ASK values, symbols и persistent TYPE format сохраняют текущий runtime
 contract; LOAD по-прежнему только меняет storage.
 
-Старый boolean `IF expr THEN/GOTO/DO ...` не является FR-12. Он сохранён только
+Boolean `IF expr THEN/GOTO/DO ...` не является FR-12. Он доступен только
 как изолированный compatibility path для непарентезированной формы; любой
 `IF (` безусловно разбирается нормативным sign-IF parser. Legacy integer targets
-остаются прежней миграцией и не расширяют composite grammar новых тестов.
+остаются compatibility migration и не расширяют composite grammar профиля.
 
 Dedicated suite выполняет настоящий RARS с exact stdout и покрывает forward и
 backward GOTO, loop, aliases/case, composite identity, unordered input,
@@ -571,7 +569,7 @@ expressions/symbols/index/functions, ASK/TYPE state, malformed syntax, выбр�
 повреждённые line offsets и absolute jump до/после/между границами wordcode.
 Python остаётся только драйвером, generator fixtures и механизмом assertions.
 
-## DO / RETURN и стек контекстов (этап 12)
+## DO / RETURN и стек контекстов
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_do -p "test_*.py" -v
@@ -612,7 +610,7 @@ legacy line-control opcodes проходят через общий DO-aware tran
 поведения. Missing selected target и повреждённый context не дают partial unwind.
 Внутренние `OP_JUMP_ABS`/`OP_JUMP_Z_ABS` этого механизма не вызывают.
 
-Immediate DO использует общий механизм stage 11: сохранённая программа и
+Immediate DO использует общий механизм line control: сохранённая программа и
 полностью скомпилированная immediate physical line находятся в одном wordcode
 image, а `return_pc` указывает на statement сразу после DO в immediate tail.
 Stored RUN, LOAD→RUN и batch используют тот же compiler/VM path. ASK values,
@@ -630,7 +628,7 @@ safety cases проверяют усечённые opcodes, kind/scope/depth/ret
 identity/offset границы строк и отсутствие частичного push/unwind. Python здесь
 остаётся только RARS driver, generator fixtures и механизмом assertions.
 
-## Нормативный FOR и стек контекстов (этап 13)
+## FOR и стек контекстов
 
 ```powershell
 py -3 -B -m unittest discover -s tests/rars_for -p "test_*.py" -v
@@ -646,8 +644,8 @@ Float32 `+1.0`; явные `+0.0` и `-0.0`, нечисла и бесконеч�
 Тело — вся последовательность операторов после обязательного `;` до конца
 текущей физической строки. Поэтому вложенный `FOR` рекурсивно владеет её
 остатком, `COMMENT` завершает тело вместе со строкой, а поздняя ошибка
-компиляции не допускает частичного выполнения. Старый
-`FOR variable=start,limit DO statement` сохранён только как изолированный
+компиляции не допускает частичного выполнения. Форма
+`FOR variable=start,limit DO statement` сохранена только как изолированный
 compatibility path для исходных fixtures; он не меняет нормативный parser.
 
 Для положительного шага вход выполняется при `start <= limit`, для
@@ -687,7 +685,7 @@ bad key, нулевой шаг, symbol/context capacity, sentinel, NEXT без �
 нефинитный increment, повреждённые поля/tag/адреса и отсутствие частичного
 DO/FOR commit.
 
-## Финальная приёмка frozen TZ v1.2 (этап 14)
+## Финальная приёмка TZ v1.2
 
 Единая нормативная точка запуска из корня репозитория:
 
@@ -721,8 +719,8 @@ exception/timeout и recovery/state preservation там, где это треб�
 AT-LARGE загружает 128 допустимых строк суммарно больше 8191 байта, выполняет
 RUN, сохраняет exact source и получает `42.0` без E06.
 
-Полный финальный прогон состоит из трёх независимых частей: Stage regression
-suites, legacy baseline 7/7 и profile acceptance. Compact traceability и
+Полный финальный прогон состоит из трёх независимых частей: функциональные
+regression suites, legacy baseline 7/7 и profile acceptance. Compact traceability и
 десятиминутный сценарий защиты приведены в `ACCEPTANCE_MATRIX.md` и
 `RARS_QUICK_CHECK.md`.
 

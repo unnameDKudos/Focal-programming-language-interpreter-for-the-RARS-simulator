@@ -1,4 +1,4 @@
-"""Stage 6 physical-line frontend contracts against the real RARS target."""
+"""Physical-line frontend contracts against the real RARS target."""
 
 import os
 from pathlib import Path

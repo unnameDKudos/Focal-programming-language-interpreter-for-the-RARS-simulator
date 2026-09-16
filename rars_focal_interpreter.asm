@@ -1085,7 +1085,7 @@ repl_load_file_return:
     addi sp, sp, 64
     ret
 
-# Commit one complete physical file line through the Stage-4 parser/storage.
+# Store one complete physical file line through the shared parser/storage path.
 # a0 is the byte count already assembled at input_line; blank lines are inert.
 repl_load_store_line:
     ENTER_FRAME (16)
@@ -1448,7 +1448,7 @@ csp_done:
 # Two phases: collect canonical source identities, then emit in key order.
 # Until compilation succeeds, line_offsets holds bounded source pointers;
 # the emission pass replaces every entry with its actual wordcode address.
-# VM must only run after the caller has checked error_code (stage-2 contract).
+# Run the VM only after successful compilation of the complete wordcode image.
 compile_program:
     ENTER_FRAME (32)
     sw ra, 0(sp)
@@ -2269,8 +2269,8 @@ compile_sign_if_emit:
     j compile_sign_if_return
 
 compile_if_compatibility:
-    # Frozen FR-12 owns the parenthesized form. Only a non-parenthesized IF
-    # can enter the isolated pre-stage-11 boolean compatibility parser.
+    # Parenthesized IF uses sign-IF syntax. Only the non-parenthesized form
+    # can enter the isolated boolean compatibility parser.
     lw t0, 4(sp)
     sw t0, parse_ptr, t1
     call compile_if_legacy
@@ -2499,7 +2499,7 @@ compile_for:
     beq t1, t2, compile_for_explicit_step
     li t2, 59
     beq t1, t2, compile_for_normative_default
-    # Isolated migration path for the seven original fixtures:
+    # Isolated compatibility path for legacy demo programs:
     # FOR variable=start,limit DO statement.
     li s1, 0
     li s2, 0
@@ -5366,7 +5366,7 @@ do_candidate_for_target_return:
     addi sp, sp, 48
     ret
 
-# Compatibility/testing entry point retaining Stage-12 checked DO-only commit.
+# Apply a checked DO-depth update for callers that do not manage FOR contexts.
 do_unwind_for_target:
     ENTER_FRAME (16)
     sw ra, 0(sp)

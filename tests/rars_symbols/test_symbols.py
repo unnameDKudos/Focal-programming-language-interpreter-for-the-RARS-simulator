@@ -1,4 +1,4 @@
-"""Stage 8 symbol-table contracts against the real RARS target."""
+"""Symbol-table contracts against the real RARS target."""
 
 import os
 from pathlib import Path

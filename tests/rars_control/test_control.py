@@ -1,4 +1,4 @@
-"""Stage 11 GOTO/sign-IF contracts executed by the real RARS target."""
+"""GOTO and sign-IF contracts executed by the real RARS target."""
 
 import os
 from pathlib import Path

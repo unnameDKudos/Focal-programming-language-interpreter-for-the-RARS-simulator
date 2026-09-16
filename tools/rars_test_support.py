@@ -94,7 +94,7 @@ def compare_output(actual, expected, mode=EXACT):
         # Spaces and final newlines belong to the exact contract.
         return actual == expected
     if mode == LEGACY_SUBSTRING:
-        # Deliberately retain the seven original fixtures' comparison contract.
+        # Preserve the legacy demo fixtures' substring-comparison contract.
         return expected.strip() in actual.strip()
     raise ValueError(f"Unknown comparison mode: {mode}")
 

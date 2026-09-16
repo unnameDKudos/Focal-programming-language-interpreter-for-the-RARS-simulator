@@ -1,4 +1,4 @@
-"""Stage 5 LOAD/SAVE contracts against the real RARS target."""
+"""LOAD/SAVE contracts against the real RARS target."""
 
 import os
 from pathlib import Path

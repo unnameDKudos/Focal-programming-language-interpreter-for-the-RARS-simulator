@@ -356,7 +356,7 @@ def run_scenario(environment, scenario, root, manifest_dir):
 
 
 def main():
-    print("Suite: frozen TZ v1.2 profile acceptance (exact comparisons)")
+    print("Suite: TZ v1.2 profile acceptance (exact comparisons)")
     try:
         manifest = load_manifest()
         counts = validate_manifest(manifest)

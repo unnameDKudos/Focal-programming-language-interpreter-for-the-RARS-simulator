@@ -1,4 +1,4 @@
-"""Stage 9 TYPE formatting contracts against the real RARS target."""
+"""TYPE formatting contracts against the real RARS target."""
 
 import os
 from pathlib import Path

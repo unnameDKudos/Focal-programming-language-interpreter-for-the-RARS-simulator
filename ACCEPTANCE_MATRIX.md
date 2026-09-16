@@ -1,4 +1,4 @@
-# Матрица приёмки frozen TZ FOCAL/RARS v1.2
+# Матрица приёмки TZ FOCAL/RARS v1.2
 
 Статус относится к `rars_focal_interpreter.asm` и подтверждается отдельным
 manifest `tests/rars_profile/manifest.json`. Финальный runner выполняет 54/54
@@ -22,7 +22,7 @@ SKIP = 0. Все обычные сравнения exact.
 | FR-10 | ASK list/expressions | `compile_ask`, runtime `compile_expr` evaluator | AP-06, AT-H02, AT-H03 | PASS |
 | FR-11 | G/GO/GOTO | `compile_goto`, validated line transfer | AP-07, AP-11, AT-E09 | PASS |
 | FR-12 | Historical sign-IF | one expression + sign branch operands | AP-08, AT-H02-N/Z/P, AT-E07/E10 | PASS |
-| FR-13 | Frozen FOR | `OP_FOR_ENTER/NEXT`, 16-entry FOR stack | AP-09, AT-H03/H06, AT-E06/E20/E21 | PASS |
+| FR-13 | FOR profile | `OP_FOR_ENTER/NEXT`, 16-entry FOR stack | AP-09, AT-H03/H06, AT-E06/E20/E21 | PASS |
 | FR-14 | DO/RETURN | `OP_DO_CALL/RETURN`, DO stack, `OP_LINE_END` | AP-10, AT-H04/H05A/H05B, AT-E08/E11/E12/E19 | PASS |
 | FR-15 | QUIT vs EXIT | VM QUIT aborts execution; REPL EXIT exits process | AP-01, AI-01 | PASS |
 | FR-16 | WRITE selectors | shared sorted `print_source` | AI-04 | PASS |
@@ -76,17 +76,17 @@ SKIP = 0. Все обычные сравнения exact.
 
 | ID | Printed / PDF page | Пример и результат | Допустимая адаптация |
 |---|---|---|---|
-| AT-H01 | 14 / 15 | 2.5; `3.05.02.0` | точный четырёхстрочный листинг, frozen TYPE rendering |
+| AT-H01 | 14 / 15 | 2.5; `3.05.02.0` | точный четырёхстрочный листинг, project TYPE rendering |
 | AT-H02-N/Z/P | 42–43 / 43–44 | шестистрочный sign-IF; удвоение меньшего/сообщение равенства | русский prompt/message заменён ASCII, внешний stdin |
-| AT-H03 | 48 / 49 | factorial, N=5 → `N:N-FAKTORIAL=1.2E+2` | только ASCII label и frozen rendering; ASK/NF/FOR алгоритм сохранён |
+| AT-H03 | 48 / 49 | factorial, N=5 → `N:N-FAKTORIAL=1.2E+2` | только ASCII label и project rendering; ASK/NF/FOR алгоритм сохранён |
 | AT-H04 | 51–52 / 52–53 | точный 2.36 DO line → `XAYAZA` | без изменения FOCAL source; batch wrapper завершает выполнение |
-| AT-H05A | 52 / 53 | 2.37 DO group → `5.0`, `4.0`, `3.0` | canonical spelling/frozen rendering |
-| AT-H05B | 55 / 56 | RETURN fragment → `VYHOD1 X=-1`, `VYHOD2 X= 0`, `KONEC` | только ASCII strings/frozen `%2`; три DO, sign-IF и RETURN сохранены |
-| AT-H06 | 56 / 57 | historical bare `%`; harmonic N=4 → `S=2.0833335E+0` | только ASCII COMMENT, external stdin `4.0`, frozen TYPE rendering |
+| AT-H05A | 52 / 53 | 2.37 DO group → `5.0`, `4.0`, `3.0` | canonical spelling/project rendering |
+| AT-H05B | 55 / 56 | RETURN fragment → `VYHOD1 X=-1`, `VYHOD2 X= 0`, `KONEC` | только ASCII strings/project `%2`; три DO, sign-IF и RETURN сохранены |
+| AT-H06 | 56 / 57 | historical bare `%`; harmonic N=4 → `S=2.0833335E+0` | только ASCII COMMENT, external stdin `4.0`, defined TYPE rendering |
 
 H06 uses exact comparison, not tolerance. Sequential Float32 additions of
 `1`, `1/2`, `1/3`, `1/4` produce bits `0x40055556`; the historical bare `%`
-format renders that value as `2.0833335E+0` under the frozen TYPE contract.
+format renders that value as `2.0833335E+0` under the defined TYPE contract.
 
 ## Non-profile limitations
 
