@@ -56,6 +56,25 @@
     {
       "mandatory": true,
       "comparison": "exact",
+      "id": "AP-14",
+      "title": "Left-associative integer power",
+      "requirements": [
+        "FR-18",
+        "FR-19",
+        "AR-01",
+        "AR-02"
+      ],
+      "kind": "positive",
+      "execution_mode": "batch",
+      "program": {
+        "inline": "1.01 TYPE 2^3^2,!,2^3,!,2^-2,!,0^0,!,8/2*2,!;Q\n"
+      },
+      "expected_stdout": "64.0\n8.0\n0.25\n1.0\n2.0\n",
+      "oracle_basis": "TZ rule"
+    },
+    {
+      "mandatory": true,
+      "comparison": "exact",
       "id": "AP-03",
       "title": "Two-character symbols and indexed round-even",
       "requirements": [

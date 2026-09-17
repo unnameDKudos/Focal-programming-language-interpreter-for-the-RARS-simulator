@@ -1,9 +1,3 @@
-# Safety convention: sticky first error; callers test after fallible calls and
-# return through their own epilogue. Only the top level reports/resets it.
-# RARS call also uses t1 as its address scratch. a*/t*/ft* are caller-saved. CHECK_ERROR uses t6; ENTER_FRAME uses t5/t6.
-# append helpers intentionally update s4 (private builder cursor), saved by
-# their owning REPL procedure. VM helpers preserve t2/t3 and ft2.
-# Procedural sp (64 KiB guarded budget) is distinct from 512-word vm_stack.
 .eqv ERR_BC_FULL 1
 .eqv ERR_BC_ACCESS 2
 .eqv ERR_VM_OVERFLOW 3
@@ -2819,13 +2813,14 @@ compile_unary_return:
     addi sp, sp, 16
     ret
 
-# Right-associative integer power. Its RHS may have one unary sign so 2^-2 is
+# Left-associative integer power. Each RHS may have one unary sign so 2^-2 is
 # valid, while other binary operators still reject an ungrouped sign.
 compile_power:
     ENTER_FRAME (16)
     sw ra, 0(sp)
     call compile_primary
     CHECK_ERROR (compile_power_return)
+compile_power_loop:
     call skip_parse_spaces
     CHECK_ERROR (compile_power_return)
     lw t0, parse_ptr
@@ -2835,11 +2830,34 @@ compile_power:
     bne t1, t2, compile_power_return
     addi t0, t0, 1
     sw t0, parse_ptr, t1
-    call compile_unary
+    sw zero, 4(sp)
+    call skip_parse_spaces
     CHECK_ERROR (compile_power_return)
+    lw t0, parse_ptr
+    CHECK_PARSE (t0, compile_power_bad_source)
+    lbu t1, 0(t0)
+    li t2, 43
+    beq t1, t2, compile_power_rhs_sign
+    li t2, 45
+    bne t1, t2, compile_power_rhs
+    li t3, 1
+    sw t3, 4(sp)
+compile_power_rhs_sign:
+    addi t0, t0, 1
+    sw t0, parse_ptr, t1
+compile_power_rhs:
+    call compile_primary
+    CHECK_ERROR (compile_power_return)
+    lw t0, 4(sp)
+    beqz t0, compile_power_emit
+    li a0, OP_NEG
+    call emit_word
+    CHECK_ERROR (compile_power_return)
+compile_power_emit:
     li a0, OP_POW
     call emit_word
-    j compile_power_return
+    CHECK_ERROR (compile_power_return)
+    j compile_power_loop
 compile_power_bad_source:
     call error_syntax
 compile_power_return:

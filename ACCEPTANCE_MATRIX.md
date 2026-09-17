@@ -1,7 +1,7 @@
 # Матрица приёмки TZ FOCAL/RARS v1.2
 
 Статус относится к `rars_focal_interpreter.asm` и подтверждается отдельным
-manifest `tests/rars_profile/manifest.json`. Финальный runner выполняет 54/54
+manifest `tests/rars_profile/manifest.json`. Финальный runner выполняет 55/55
 mandatory scenarios на RARS 1.6: 25 negative, 11 REPL/file integration,
 9 historical executions из 7 уникальных литературных fixtures, mandatory
 SKIP = 0. Все обычные сравнения exact.
@@ -23,12 +23,12 @@ SKIP = 0. Все обычные сравнения exact.
 | FR-11 | G/GO/GOTO | `compile_goto`, validated line transfer | AP-07, AP-11, AT-E09 | PASS |
 | FR-12 | Historical sign-IF | one expression + sign branch operands | AP-08, AT-H02-N/Z/P, AT-E07/E10 | PASS |
 | FR-13 | FOR profile | `OP_FOR_ENTER/NEXT`, 16-entry FOR stack | AP-09, AT-H03/H06, AT-E06/E20/E21 | PASS |
-| FR-14 | DO/RETURN | `OP_DO_CALL/RETURN`, DO stack, `OP_LINE_END` | AP-10, AT-H04/H05A/H05B, AT-E08/E11/E12/E19 | PASS |
+| FR-14 | DO/RETURN | `OP_DO/OP_RETURN`, DO stack, `OP_LINE_END` | AP-10, AT-H04/H05A/H05B, AT-E08/E11/E12/E19 | PASS |
 | FR-15 | QUIT vs EXIT | VM QUIT aborts execution; REPL EXIT exits process | AP-01, AI-01 | PASS |
 | FR-16 | WRITE selectors | shared sorted `print_source` | AI-04 | PASS |
 | FR-17 | Decimal/exponent literals | checked Float32 literal parser | AP-02 | PASS |
-| FR-18 | Expressions/precedence | shared expression compiler and Float32 VM | AP-02, AP-06, AT-E03/E13 | PASS |
-| FR-19 | Integer power | checked exponent + exponentiation by squaring | AP-02, AT-E14/E15 | PASS |
+| FR-18 | Expressions/precedence | shared expression compiler and Float32 VM | AP-02, AP-06, AP-14, AT-E03/E13 | PASS |
+| FR-19 | Integer power | checked exponent + exponentiation by squaring | AP-02, AP-14, AT-E14/E15 | PASS |
 | FR-20 | First two symbol chars | normalized two-byte symbol key, reserved F | AP-03, AT-H03 | PASS |
 | FR-21 | Indexed variables | unified 512-entry table, RNE index | AP-03, AP-13, AT-D01, AT-E17 | PASS |
 | FR-22 | Four functions | VM FABS/FSQT/FITR/FSGN | AP-04, AT-D01, AT-E16 | PASS |
@@ -63,7 +63,7 @@ SKIP = 0. Все обычные сравнения exact.
 | ID | Кратко | Evidence | Acceptance IDs | Статус / примечание |
 |---|---|---|---|---|
 | K-01 | Все требования traced | настоящая матрица + manifest validator | AT-LARGE и вся матрица | PASS; FR 26/26, AR 6/6, REL 5/5 |
-| K-02 | ≥40, 100% | runner summary 54/54, SKIP 0 | AP-01, AT-D01 | PASS |
+| K-02 | ≥40, 100% | runner summary 55/55, SKIP 0 | AP-01, AP-14, AT-D01 | PASS |
 | K-03 | ≥6 literary programs | validator counts unique historical fixture paths | AT-H01..AT-H06 | PASS; 7 programs, 9 executions |
 | K-04 | Controlled negatives | exact error/recovery corpus | AP-12, AT-E01..AT-E25 | PASS; 25/25 |
 | K-05 | Current documentation | TZ, guide, architecture, ПМИ, quick check | AP-01 plus document audit | PASS |

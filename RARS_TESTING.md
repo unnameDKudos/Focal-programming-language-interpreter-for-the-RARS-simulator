@@ -355,10 +355,11 @@ py -3 -B -m unittest discover -s tests/rars_expr -p "test_*.py" -v
 
 `compile_expr` остаётся единственной точкой expression grammar. Арифметические
 уровни: binary `+/-`; затем `/`; затем `*`; затем unary sign над power;
-right-associative `^`; primary (literal, variable, function или grouping).
-Таким образом `*` связывает сильнее `/`, `-A^I` означает `-(A^I)`, а знак
-после обычного binary operator без группировки отвергается. Правая сторона `^`
-может иметь один знак, поэтому `2^-2` допустимо.
+left-associative `^`; primary (literal, variable, function или grouping).
+Таким образом `*` связывает сильнее `/`, `2^3^2` означает `(2^3)^2`,
+`-A^I` означает `-(A^I)`, а знак после обычного binary operator без
+группировки отвергается. Правая сторона `^` может иметь один знак, поэтому
+`2^-2` допустимо.
 
 Decimal scanner принимает целую, fixed-point и E/e формы, строит значение
 только Float32-инструкциями RARS и помещает raw IEEE-754 binary32 bits после
@@ -706,7 +707,7 @@ Runner до исполнения валидирует manifest и заверша
 mandatory < 40, negative < 10, REPL/file integration < 5, уникальных
 historical fixture programs < 6 либо
 не покрыты все FR-01..FR-26, AR-01..AR-06, REL-01..REL-05 и K-01..K-05.
-Отсутствующие Java/JAR/fixture — FAIL, не SKIP. Текущий корпус: 54 mandatory,
+Отсутствующие Java/JAR/fixture — FAIL, не SKIP. Текущий корпус: 55 mandatory,
 25 negative, 11 integration, 9 historical executions из 7 уникальных
 historical fixture programs, mandatory skipped 0.
 

@@ -142,7 +142,7 @@ expr_bits_fail:
     def test_integer_power_and_errors(self):
         self.session([(
             "TYPE 2^3,!,2^0,!,2^-2,!,0^0,!,2^3^2,!",
-            "8.0\n1.0\n0.25\n1.0\n512.0\n",
+            "8.0\n1.0\n0.25\n1.0\n64.0\n",
         )])
         for expression in ["4^0.5", "0^-1"]:
             with self.subTest(expression=expression):
